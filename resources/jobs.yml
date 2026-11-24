@@ -11,6 +11,11 @@ resources:
         - environment_key: standard
           spec:
             environment_version: '6'
+            dependencies:
+              - pdfplumber==0.11.10
+              - pypdf==7.0.1
+              - pypdfium2==5.15.0
+              - reportlab==5.1.1
       tasks:
         - task_key: bootstrap
           environment_key: standard

@@ -18,6 +18,8 @@ GitHub Actions identifies ci-ok by its publisher and name. CODEOWNERS protects w
 
 Prepare bot-authored PRs for a normal dev increment, a protected-file change, a held draft, and an actual dev-to-main release. Enable squash auto-merge only for the normal increment. Ron supervises `scripts/guardrail_probe.ps1` in a separate bot-authenticated terminal. The opt-in main probe uses an approved release ready to publish if permissions are misconfigured. Close unsuccessful temporary fixture PRs after recording evidence.
 
+When the first three probes are already recorded, run `scripts/guardrail_probe.ps1 -ReleaseOnly -ReleasePr <number> -AttemptApprovedReleaseMerge` after Ron approves the current release head. The script checks the current head's PR CI and Ron's approval, then submits the merge request with the bot's credentials. The CLI's `--admin` flag skips its local merge-state check so the probe exercises GitHub's authorization. Record the denial and verify the PR stays open in the [guardrail evidence](evidence/guardrails.md).
+
 ## Databricks and secrets
 
 Create the named workload service principals in the radkay-lab workspace and their required OAuth secrets. Use Ron's user as the operator with delegated workspace authentication. The provisioner uses Ron's workspace-admin CLI profile and the existing shared 2X-Small warehouse ID. Keep this profile and all credentials outside Build agent sessions.

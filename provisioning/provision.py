@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
@@ -234,24 +233,6 @@ def provision(args):
         updates.append({"user_name": args.ron_user, "permission_level": "CAN_USE"})
     dbx(args.workspace_profile, "permissions", "update", "warehouses", args.warehouse_id,
         payload={"access_control_list": updates})
-    variables = {f"BUNDLE_VAR_{role}_application_id": apps[role] for role in apps if role != "reader"}
-    for verb in ("validate", "deploy"):
-        subprocess.run(
-            ["databricks", "bundle", verb, "--target", args.environment, "--profile", args.workspace_profile],
-            cwd=ROOT, env=os.environ | variables, check=True,
-        )
-    files = f"/Workspace/Users/{args.ron_user}/.bundle/ledgerlens/{args.environment}/files"
-    directory = dbx(args.workspace_profile, "workspace", "get-status", files)
-    dbx(args.workspace_profile, "permissions", "update", "directories", str(directory["object_id"]), payload={
-        "access_control_list": [
-            {"service_principal_name": apps[role], "permission_level": "CAN_READ"}
-            for role in ("processor", "evaluator")
-        ],
-    })
-    subprocess.run(
-        ["databricks", "bundle", "summary", "--target", args.environment, "--profile", args.workspace_profile],
-        cwd=ROOT, env=os.environ | variables, check=True,
-    )
 
 
 def main():

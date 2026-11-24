@@ -21,9 +21,10 @@ permissions:
 jobs:
   integration:
     if: >-
-      ${{ vars.LEDGERLENS_INTEGRATION_READY == 'true' &&
-          ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
-           github.ref == 'refs/heads/main') }}
+      ${{ (github.event_name == 'push' && github.ref == 'refs/heads/dev' &&
+           vars.LEDGERLENS_INTEGRATION_READY_DEV == 'true') ||
+          (github.ref == 'refs/heads/main' &&
+           vars.LEDGERLENS_INTEGRATION_READY_DEMO == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: ${{ github.ref == 'refs/heads/dev' && 'ledgerlens-dev' || 'ledgerlens-demo' }}
@@ -38,12 +39,34 @@ jobs:
         run: |
           python3 -m pip install uv==0.9.18
           uv sync --locked
-      - name: Verify job and published Gold
+      - name: Install pinned Databricks CLI
+        uses: databricks/setup-cli@e1dad86b08f6ea07707aea128ec4bfa76af8db55
+        with:
+          version: '1.28.0'
+      - name: Deploy bundle and verify job and published Gold
         env:
           DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_AUTH_TYPE: oauth-m2m
           DATABRICKS_WAREHOUSE_ID: ${{ vars.DATABRICKS_WAREHOUSE_ID }}
-          DATABRICKS_JOB_ID: ${{ vars.DATABRICKS_JOB_ID }}
+          BUNDLE_VAR_processor_application_id: ${{ vars.DATABRICKS_PROCESSOR_APPLICATION_ID }}
+          BUNDLE_VAR_evaluator_application_id: ${{ vars.DATABRICKS_EVALUATOR_APPLICATION_ID }}
+          BUNDLE_TARGET: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'demo' }}
           LEDGERLENS_CATALOG: ${{ github.ref == 'refs/heads/dev' && 'ledgerlens_dev' || 'ledgerlens_demo' }}
-        run: uv run --no-sync python scripts/databricks_smoke.py
+        shell: bash
+        run: |
+          databricks bundle deploy --target "$BUNDLE_TARGET" --auto-approve
+          summary=$(databricks bundle summary --target "$BUNDLE_TARGET" --output json)
+          files=$(jq -er '.workspace.file_path' <<< "$summary")
+          job_id=$(jq -er '.resources.jobs.process.id | tostring | select(test("^[1-9][0-9]*$"))' <<< "$summary")
+          directory=$(databricks workspace get-status "$files" --output json)
+          directory_id=$(jq -er '.object_id' <<< "$directory")
+          permissions=$(jq -n \
+            --arg processor "$BUNDLE_VAR_processor_application_id" \
+            --arg evaluator "$BUNDLE_VAR_evaluator_application_id" \
+            '{access_control_list: ([$processor, $evaluator] | map({
+              service_principal_name: ., permission_level: "CAN_READ"
+            }))}')
+          databricks workspace update-permissions directories "$directory_id" --json "$permissions" >/dev/null
+          DATABRICKS_JOB_ID="$job_id" uv run --no-sync python scripts/databricks_smoke.py

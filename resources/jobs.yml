@@ -4,9 +4,6 @@ resources:
       name: ledgerlens-${bundle.target}-process
       run_as:
         service_principal_name: ${var.processor_application_id}
-      permissions:
-        - service_principal_name: ${var.integration_application_id}
-          level: CAN_MANAGE_RUN
       max_concurrent_runs: 1
       queue:
         enabled: true

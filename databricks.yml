@@ -12,8 +12,6 @@ variables:
     description: Processing service principal application ID
   evaluator_application_id:
     description: Evaluation service principal application ID
-  integration_application_id:
-    description: CI or evidence service principal application ID
 
 sync:
   exclude:

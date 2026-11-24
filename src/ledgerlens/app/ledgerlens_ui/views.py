@@ -48,6 +48,8 @@ def show_workbench(operator):
 
 def show_decisions(operator, document):
     st.subheader("Decision")
+    if message := st.session_state.pop("decision_saved", None):
+        st.success(message)
     corrected_fields = {field.field_id: field.field_name for field in document.fields if can_correct(field)}
     reasons = operator.reasons()
     actions = [
@@ -58,8 +60,6 @@ def show_decisions(operator, document):
         st.caption("No decisions are available for this document state.")
         return
 
-    if message := st.session_state.pop("decision_saved", None):
-        st.success(message)
     scope = f"{document.doc_id}-{document.extraction_id}-{document.state_at.isoformat()}"
     action = st.selectbox("Action", actions, format_func=lambda item: item.replace("_", " ").title(),
                           key=f"action-{scope}")

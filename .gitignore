@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pytest_cache/
+work/
+.env
+.env.*
+.streamlit/secrets.toml
+.databrickscfg
+.databricks/

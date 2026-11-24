@@ -1,0 +1,55 @@
+name: PR CI
+on:
+  pull_request:
+    branches: [dev, main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, labeled, unlabeled, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify bootstrap
+        run: |
+          python3 -m pip install uv==0.9.18
+          uv sync --locked
+          uv run --no-sync python -m unittest discover -s tests
+  policy:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Enforce hold and release branch policy
+        env:
+          HELD: ${{ contains(github.event.pull_request.labels.*.name, 'needs-ron') }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          HEAD: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          test "$HELD" = false
+          test "$DRAFT" = false
+          if [ "$BASE" = main ]; then
+            test "$HEAD" = dev
+            test "$HEAD_REPO" = "$REPO"
+          fi
+  ci-ok:
+    if: ${{ always() }}
+    needs: [checks, policy]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every check to succeed
+        env:
+          CHECKS: ${{ needs.checks.result }}
+          POLICY: ${{ needs.policy.result }}
+        run: |
+          test "$CHECKS" = success
+          test "$POLICY" = success

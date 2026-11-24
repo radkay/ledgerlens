@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (( $# != 1 )) || [[ $1 != +([0-9]) ]]; then
+    echo 'Usage: scripts/merge-feature PR_NUMBER' >&2
+    exit 2
+fi
+
+login=$(gh auth status --active --hostname github.com --json hosts \
+    --jq '.hosts["github.com"][] | select(.state == "success") | .login')
+if [[ $login != radkay-bot ]]; then
+    echo 'Activate radkay-bot for github.com' >&2
+    exit 2
+fi
+
+repo=radkay/ledgerlens
+head=$(gh pr view "$1" --repo "$repo" \
+    --json author,baseRefName,headRefOid,isCrossRepository,isDraft,labels,reviewDecision,state \
+    --jq 'select(.author.login == "radkay-bot" and .baseRefName == "dev" and .state == "OPEN"
+      and (.isCrossRepository | not) and (.isDraft | not)
+      and (.labels | any(.name == "needs-ron") | not)
+      and (.reviewDecision != "REVIEW_REQUIRED" and .reviewDecision != "CHANGES_REQUESTED"))
+      | .headRefOid')
+if [[ -z $head ]]; then
+    echo 'PR is ineligible for unattended squash auto-merge' >&2
+    exit 2
+fi
+
+exec gh pr merge "$1" --repo "$repo" --auto --squash --match-head-commit "$head"

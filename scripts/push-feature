@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (( $# != 0 )); then
+    echo 'Usage: scripts/push-feature' >&2
+    exit 2
+fi
+
+branch=$(git symbolic-ref --quiet --short HEAD)
+case "$branch" in
+    main|dev) echo "Protected branch: $branch" >&2; exit 2 ;;
+esac
+git check-ref-format "refs/heads/$branch"
+if [[ $(git remote get-url --push --all origin) != 'https://github.com/radkay/ledgerlens.git' ]]; then
+    echo 'Set the origin push URL to https://github.com/radkay/ledgerlens.git' >&2
+    exit 2
+fi
+
+login=$(gh auth status --active --hostname github.com --json hosts \
+    --jq '.hosts["github.com"][] | select(.state == "success") | .login')
+if [[ $login != radkay-bot ]]; then
+    echo 'Activate radkay-bot for github.com' >&2
+    exit 2
+fi
+
+ref="refs/heads/$branch"
+exec git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+    push --no-follow-tags --recurse-submodules=no --set-upstream origin "$ref:$ref"

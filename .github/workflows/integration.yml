@@ -1,0 +1,49 @@
+name: Databricks integration
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - '.github/workflows/integration.yml'
+      - '.python-version'
+      - 'CONTRACT.md'
+      - 'databricks.yml'
+      - 'provisioning/**'
+      - 'pyproject.toml'
+      - 'resources/**'
+      - 'scripts/databricks_smoke.py'
+      - 'src/**'
+      - 'uv.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    if: >-
+      ${{ vars.LEDGERLENS_INTEGRATION_READY == 'true' &&
+          ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+           github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: ${{ github.ref == 'refs/heads/dev' && 'ledgerlens-dev' || 'ledgerlens-demo' }}
+    concurrency:
+      group: ledgerlens-integration-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install pinned runtime
+        run: |
+          python3 -m pip install uv==0.9.18
+          uv sync --locked
+      - name: Verify job and published Gold
+        env:
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_WAREHOUSE_ID: ${{ vars.DATABRICKS_WAREHOUSE_ID }}
+          DATABRICKS_JOB_ID: ${{ vars.DATABRICKS_JOB_ID }}
+          LEDGERLENS_CATALOG: ${{ github.ref == 'refs/heads/dev' && 'ledgerlens_dev' || 'ledgerlens_demo' }}
+        run: uv run --no-sync python scripts/databricks_smoke.py

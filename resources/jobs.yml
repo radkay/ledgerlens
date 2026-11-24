@@ -1,0 +1,40 @@
+resources:
+  jobs:
+    process:
+      name: ledgerlens-${bundle.target}-process
+      run_as:
+        service_principal_name: ${var.processor_application_id}
+      permissions:
+        - service_principal_name: ${var.integration_application_id}
+          level: CAN_MANAGE_RUN
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
+      environments:
+        - environment_key: standard
+          spec:
+            environment_version: '6'
+      tasks:
+        - task_key: bootstrap
+          environment_key: standard
+          spark_python_task:
+            python_file: ../src/ledgerlens/bootstrap_job.py
+            parameters: [process, '${var.catalog}', '{{job.trigger.type}}']
+
+    evaluate:
+      name: ledgerlens-${bundle.target}-evaluate
+      run_as:
+        service_principal_name: ${var.evaluator_application_id}
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
+      environments:
+        - environment_key: standard
+          spec:
+            environment_version: '6'
+      tasks:
+        - task_key: bootstrap
+          environment_key: standard
+          spark_python_task:
+            python_file: ../src/ledgerlens/bootstrap_job.py
+            parameters: [evaluate, '${var.catalog}', '{{job.trigger.type}}']

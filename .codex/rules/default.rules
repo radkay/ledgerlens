@@ -1,0 +1,10 @@
+# The scripts in BOOTSTRAP.md run fixed feature-only push and merge commands
+# inside the sandbox. GitHub rulesets enforce protected refs remotely.
+prefix_rule(pattern=["git", "push"], decision="forbidden", justification="Use scripts/push-feature for feature pushes.")
+prefix_rule(pattern=["git", "reset"], decision="forbidden", justification="Prefix rules block reset in every mode to cover reordered hard-reset options.")
+prefix_rule(pattern=["git", ["clean", "filter-branch", "filter-repo"]], decision="forbidden")
+prefix_rule(pattern=["git-filter-repo"], decision="forbidden")
+prefix_rule(pattern=["gh", "pr", "merge"], decision="forbidden", justification="Use scripts/merge-feature for eligible feature PRs.")
+prefix_rule(pattern=["gh", ["api", "secret", "variable", "ruleset"]], decision="forbidden")
+prefix_rule(pattern=["gh", "repo", ["edit", "delete"]], decision="forbidden")
+prefix_rule(pattern=["databricks", "jobs", "delete"], decision="forbidden")

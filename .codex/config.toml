@@ -1,0 +1,15 @@
+default_permissions = "ledgerlens_build"
+approval_policy = "never"
+model_reasoning_effort = "medium"
+
+[permissions.ledgerlens_build]
+extends = ":workspace"
+
+[permissions.ledgerlens_build.filesystem.":workspace_roots"]
+".git" = "write"
+".codex" = "read"
+".agents" = "read"
+".aws" = "read"
+
+[permissions.ledgerlens_build.network]
+enabled = true

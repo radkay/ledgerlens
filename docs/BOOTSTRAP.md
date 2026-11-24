@@ -1,0 +1,54 @@
+# Ron's bootstrap checklist
+
+Review CONTRACT.md and the decision log before the split. Ron initializes and pushes the reviewed initial commit to main, creates dev at the same SHA, then enables the controls below. Use a sacrificial PR to register the ci-ok check before selecting it in the ruleset. Complete the four probes before enabling unattended work.
+
+## Repository settings
+
+Create public radkay/ledgerlens with main as default. Give radkay-bot Write only and keep Ron as the sole administrator. Enable squash merges, merge commits, auto-merge, and automatic head-branch deletion. Disable rebase merges. Create labels agent:codex and needs-ron. Set Actions default permissions to read-only and leave permission to approve PRs with Actions disabled.
+
+| Active ruleset | Exact target | Rules |
+|---|---|---|
+| ledgerlens-dev-protection | dev | Require PR, zero general approvals, code-owner review, and ci-ok from GitHub Actions. Leave “Require branches to be up to date before merging” disabled. Permit squash only for PR merges. Block force pushes and restrict deletions. No bypass. |
+| ledgerlens-main-protection | main | Require PR, one approval, code-owner review, dismissal of stale approvals, and ci-ok from GitHub Actions. Permit merge commits only for PR merges. Block force pushes and restrict deletions. No bypass. |
+| ledgerlens-main-ron-only | main | Restrict updates. Add repository administrator as a PR-only bypass, with Ron the sole administrator. Keep that actor off both protection bypass lists. |
+
+The release policy job requires the main PR head to be dev in the same repo. Open the release PR as radkay-bot so Ron can approve and manually merge it. Protected branch deletion restrictions preserve dev after a release merge.
+
+GitHub Actions identifies ci-ok by its publisher and name. CODEOWNERS protects workflow edits. GitHub's label reruns are asynchronous, so open needs-ron PRs as drafts and keep them drafts for the entire hold. Leave auto-merge disabled on a held PR or a protected-file PR awaiting Ron.
+
+Prepare bot-authored PRs for a normal dev increment, a protected-file change, a held draft, and an actual dev-to-main release. Enable squash auto-merge only for the normal increment. Ron supervises `scripts/guardrail_probe.ps1` in a separate bot-authenticated terminal. The opt-in main probe uses an approved release ready to publish if permissions are misconfigured. Close unsuccessful temporary fixture PRs after recording evidence.
+
+## Databricks and secrets
+
+Create the named workload service principals in the radkay-lab workspace and their required OAuth secrets. Use Ron's user as the operator with delegated workspace authentication. The provisioner uses Ron's workspace-admin CLI profile and the existing shared 2X-Small warehouse ID. Keep this profile and all credentials outside Build agent sessions.
+
+The workspace must provide Unity Catalog, serverless jobs, OAuth M2M, and workspace identity APIs for group provisioning. Confirm those capabilities in radkay-lab within the project's $0 boundary. [Databricks Free Edition limitations](https://docs.databricks.com/aws/en/getting-started/free-edition-limitations)
+
+Run from the checkout using Databricks CLI 1.28.0. Apply once per environment with the same Ron profile and warehouse. Reruns reconcile the bootstrap objects and redeploy the same bundle target.
+
+```bash
+uv sync --locked
+uv run --no-sync python provisioning/provision.py dev --plan
+uv run --no-sync python provisioning/provision.py dev \
+  --workspace-profile radkay-lab --warehouse-id "<warehouse-id>" --ron-user "<Ron’s workspace username>"
+uv run --no-sync python provisioning/provision.py demo \
+  --workspace-profile radkay-lab --warehouse-id "<warehouse-id>" --ron-user "<Ron’s workspace username>"
+```
+
+The script creates catalogs, schemas, volumes, tables, views, masks and reviewer groups, adds Ron to each reviewer group, and grants the named identities access. It seeds reasons, the non-secret expected-forms inventory, a digital W-2, and an evaluator-only manifest and answer-key table. It then deploys the processing and evaluation jobs with separate run-as identities. Use the deployed `process` job ID for integration. The bootstrap tasks check interpreter and source access. The processing and evaluation implementations will replace those probes before integration is enabled.
+
+In a fresh radkay-lab serverless notebook, leave the environment on its workspace default, record the Environment panel version, and run `import sys; print(sys.version.split()[0])`. Expected results are Standard v6 and Python 3.12.3. Record the observed version and date in D-011. Run each bundled bootstrap task as its configured job identity and capture its runtime and access result. [Databricks serverless environment v6](https://docs.databricks.com/aws/en/release-notes/serverless/environment-version/six)
+
+Create GitHub environments ledgerlens-dev and ledgerlens-demo with Selected branches and tags set to dev only and main only respectively. Enter DATABRICKS_CLIENT_SECRET for ledgerlens-dev-ci or ledgerlens-demo-evidence respectively. Set the four matching environment variables from CONTRACT.md. Leave repository variable LEDGERLENS_INTEGRATION_READY unset or false until both environments, credentials, fixtures and publication-capable tasks are ready. Set it to true to enable post-merge integration on relevant paths and manual dispatch from main.
+
+Create external reader OAuth credentials only for the Community Cloud demo reader and enter them directly there. Verify GitHub Actions and Streamlit OAuth independently. Verify the processor can read expected forms, the evaluator can read the private answer key, and the reader and integration identity are denied access to sensitive tables. Verify the managed dbsql MCP call before publishing claims.
+
+## Codex and local validation
+
+In Codex CLI 0.172.0, trust the project and start a fresh session per feature worktree. The project config selects the `ledgerlens_build` profile. It extends `:workspace`, explicitly makes the workspace's `.git` writable, keeps `.codex`, `.agents` and `.aws` read-only, enables network access for GitHub and package installs, and sets approvals to `never`. Set radkay-bot as the active GitHub CLI account and commit identity. Build agents run `scripts/push-feature` to push the current feature branch and `gh pr create --repo radkay/ledgerlens --base dev --label agent:codex` to open the PR. Use `scripts/merge-feature PR_NUMBER` for eligible squash auto-merge. Ron handles the initial Git setup and the dev-to-main merge.
+
+Use the named profile instead of a legacy `sandbox_mode` override. In a linked Git worktree, the local `.git` file points outside the worktree. Resolve the two backing directories with `git rev-parse --absolute-git-dir` and `git rev-parse --path-format=absolute --git-common-dir`. Give the profile explicit `"write"` entries for those exact absolute paths under `[permissions.ledgerlens_build.filesystem]` in the host's user config. Use a new session after changing permissions. Host-managed read-only mounts and network restrictions still apply. [Codex permission profiles](https://learn.chatgpt.com/docs/permissions#extend-a-profile)
+
+The trusted project loads the forbidden command prefixes from `.codex/rules/default.rules`. The push and merge scripts use fixed arguments and check the active bot identity. Treat prefix rules as local command controls. GitHub rulesets enforce protected refs and merges remotely. [Codex command rules](https://learn.chatgpt.com/docs/agent-configuration/rules)
+
+Use Python 3.12.3 and uv 0.9.18. Regenerate the lock with `uv lock` and validate with `uv sync --locked` followed by `uv run --no-sync python -m unittest discover -s tests`. The workspace runtime probe, bundle deployment and live denial checks require the authenticated radkay-lab admin profile.

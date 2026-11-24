@@ -1,0 +1,9 @@
+[project]
+name = "ledgerlens"
+version = "0.1.0"
+requires-python = ">=3.12.3"
+dependencies = []
+
+[tool.uv]
+required-version = "==0.9.18"
+package = false

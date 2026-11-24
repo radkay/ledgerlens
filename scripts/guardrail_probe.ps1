@@ -80,7 +80,9 @@ if (!$AttemptApprovedReleaseMerge) {
 
 # A misconfigured ruleset could allow this real release to merge.
 # Use only with Ron supervising an approved release that is safe to publish.
-$result = gh pr merge $ReleasePr --repo $repo --merge --match-head-commit $release.headRefOid 2>&1 | Out-String
+# --admin skips gh's local merge-state check. GitHub still authorizes the
+# merge request using the authenticated radkay-bot identity.
+$result = gh pr merge $ReleasePr --repo $repo --admin --merge --match-head-commit $release.headRefOid 2>&1 | Out-String
 $status = $LASTEXITCODE
 if ($status -eq 0 -or (Get-ProbePr $ReleasePr).state -ne 'OPEN') {
     throw 'FAIL: the bot merge succeeded or the PR is no longer open'

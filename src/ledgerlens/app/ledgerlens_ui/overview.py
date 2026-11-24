@@ -44,7 +44,7 @@ def show_overview(reader):
         } for row in accuracy])
 
 
-def show_batches(operator=None):
+def show_batches(operator=None, authorize=lambda: False):
     st.subheader("Processing schedule and batch")
     if operator is None:
         st.caption("Schedule is available in authenticated operator mode.")
@@ -60,6 +60,8 @@ def show_batches(operator=None):
 
     @st.fragment(run_every=POLL_INTERVAL_SECONDS if st.session_state.get("batch_poll_until") else None)
     def batch_status():
+        if not authorize():
+            st.rerun()
         job_run_id = st.session_state.get("batch_job_run_id")
         event = latest_batch_event(operator, job_run_id) if job_run_id else None
         active = bool(job_run_id and (event is None or event.status in ACTIVE_BATCH_STATES))

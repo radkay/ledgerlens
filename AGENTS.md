@@ -10,4 +10,4 @@ If a decision needs Ron, finish independent work, open a draft labeled needs-ron
 
 Run uv sync --locked and uv run --no-sync python -m unittest discover -s tests. Use the PR Metrics section. Record decisions and review findings with coordinated IDs. Use Build agents, Processing jobs and Runtime agent as defined in CONTRACT.md.
 
-List every failed or skipped check in the PR Metrics and final handoff, with its cause and disposition. Required checks must succeed before merge.
+List every failed, canceled, or skipped check in the PR Metrics and every summary, with its cause and disposition. Required checks must succeed before merge.

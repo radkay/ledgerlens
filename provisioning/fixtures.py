@@ -1,4 +1,4 @@
-"""Deterministic synthetic bootstrap fixture and its separately stored answer key."""
+"""Deterministic synthetic fixtures and their separately stored answer keys."""
 
 import hashlib
 
@@ -52,16 +52,55 @@ def bootstrap_fixture():
         f"Employer EIN: {fields['employer_ein']}",
         f"Wages: {fields['wages']}",
     ])
+    return fixture_entry(pdf, "bootstrap-w2-digital", "W-2", "fixture-person-001",
+                         ["W-2", "1099"], fields)
+
+
+def digital_fixtures():
+    """Return the digital fixture set while preserving the bootstrap entry point."""
+    fixtures = [bootstrap_fixture()]
+    for form, person, expected_forms, items in supplemental_forms():
+        pdf = digital_w2(form_lines(form, person, items))
+        fields = {name: value for _, name, value in items}
+        fixture_id = f"bootstrap-{form.lower()}-digital"
+        fixtures.append(fixture_entry(pdf, fixture_id, form, person, expected_forms, fields))
+    return fixtures
+
+
+def supplemental_forms():
+    return (
+        ("1099", "fixture-person-001", ["W-2", "1099"], [
+            ("Recipient SSN", "recipient_ssn", synthetic_identifier("ssn", 1)),
+            ("Payer TIN", "payer_tin", synthetic_identifier("ein", 2)),
+            ("Other income", "other_income", "1150.00"),
+        ]),
+        ("1098", "fixture-person-002", ["1098"], [
+            ("Borrower SSN", "borrower_ssn", synthetic_identifier("ssn", 2)),
+            ("Lender TIN", "lender_tin", synthetic_identifier("ein", 3)),
+            ("Mortgage interest", "mortgage_interest", "4800.50"),
+        ]),
+    )
+
+
+def form_lines(form, person, items):
+    return [
+        f"Synthetic {form} - 2025 - LedgerLens Sample",
+        f"Fixture person key: {person}",
+        *(f"{label}: {value}" for label, _, value in items),
+    ]
+
+
+def fixture_entry(pdf, fixture_id, form, person, expected_forms, fields, variant="digital"):
     doc_id = hashlib.sha256(pdf).hexdigest()
     entry = {
-        "fixture_id": "bootstrap-w2-digital",
+        "fixture_id": fixture_id,
         "filename": f"{doc_id}.pdf",
         "sha256": doc_id,
-        "form_type": "W-2",
-        "variant": "digital",
+        "form_type": form,
+        "variant": variant,
         "tax_year": 2025,
-        "person_key": "fixture-person-001",
-        "expected_forms": ["W-2", "1099"],
+        "person_key": person,
+        "expected_forms": expected_forms,
         "fields": [
             {
                 "field_id": hashlib.sha256(f"{doc_id}:{name}:1".encode()).hexdigest(),

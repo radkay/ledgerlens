@@ -57,10 +57,13 @@ def main():
     if run["state"].get("result_state") != "SUCCESS":
         raise RuntimeError("Processing job did not succeed")
 
-    def sql(statement):
+    def sql(statement, **parameters):
         result = api("/api/2.0/sql/statements", {
             "warehouse_id": warehouse,
             "statement": statement,
+            "parameters": [
+                {"name": name, "type": "STRING", "value": str(value)} for name, value in parameters.items()
+            ],
             "wait_timeout": "10s",
         })
         if result["status"]["state"] in {"PENDING", "RUNNING"}:
@@ -71,11 +74,26 @@ def main():
             )
         return result
 
-    publication = sql(f"SELECT run_id FROM {catalog}.gold.latest_publication")
-    if publication["status"]["state"] != "SUCCEEDED" or len(
-        publication.get("result", {}).get("data_array", [])
-    ) != 1:
-        raise RuntimeError("Expected exactly one published run")
+    publication = sql(f"""
+        SELECT latest.run_id
+        FROM {catalog}.gold.latest_publication AS latest
+        WHERE EXISTS (
+            SELECT 1 FROM {catalog}.ops.pipeline_runs AS event
+            WHERE event.run_id = latest.run_id
+              AND event.job_run_id = :job_run_id
+              AND event.trigger_type = 'manual'
+              AND event.status IN ('published', 'skipped_duplicate')
+        )
+    """, job_run_id=run_id)
+    rows = publication.get("result", {}).get("data_array", [])
+    if publication["status"]["state"] != "SUCCEEDED" or len(rows) != 1:
+        raise RuntimeError("The processing invocation did not produce or reuse the current publication")
+    lineage = sql(
+        f"SELECT 1 FROM {catalog}.gold.current_lineage WHERE run_id = :run_id LIMIT 1",
+        run_id=rows[0][0],
+    )
+    if lineage["status"]["state"] != "SUCCEEDED" or not lineage.get("result", {}).get("data_array"):
+        raise RuntimeError("Expected published Gold lineage for the processing invocation")
     for table in ("silver.fields", "eval.answer_key"):
         result = sql(f"SELECT 1 FROM {catalog}.{table} LIMIT 1")
         error = result["status"].get("error", {})
@@ -83,7 +101,7 @@ def main():
             "PERMISSION_DENIED", "INSUFFICIENT_PERMISSIONS",
         }:
             raise RuntimeError(f"Expected an explicit permission denial for {table}")
-    print("Processing job, Gold publication, and Silver/eval denial checks passed")
+    print("Processing job, Gold publication and lineage, and Silver/eval denial checks passed")
 
 
 if __name__ == "__main__":

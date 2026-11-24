@@ -1,4 +1,4 @@
-"""Exercise the provisioned processing job and verify serving/denial paths."""
+"""Exercise the provisioned jobs and verify serving and denial paths."""
 
 import base64
 import json
@@ -25,8 +25,9 @@ def main():
     client = os.environ["DATABRICKS_CLIENT_ID"]
     secret = os.environ["DATABRICKS_CLIENT_SECRET"]
     warehouse = os.environ["DATABRICKS_WAREHOUSE_ID"]
-    job_id = int(os.environ["DATABRICKS_JOB_ID"])
-    if not all((client, secret, warehouse)) or job_id <= 0:
+    processing_job_id = int(os.environ["DATABRICKS_JOB_ID"])
+    evaluation_job_id = int(os.environ["DATABRICKS_EVALUATION_JOB_ID"])
+    if not all((client, secret, warehouse)) or min(processing_job_id, evaluation_job_id) <= 0:
         raise ValueError("Integration configuration is incomplete")
     auth = base64.b64encode(f"{client}:{secret}".encode()).decode()
     token = request(
@@ -49,13 +50,15 @@ def main():
             time.sleep(5)
         raise TimeoutError("Databricks operation did not finish")
 
-    run_id = api("/api/2.1/jobs/run-now", {"job_id": job_id})["run_id"]
-    run = wait_for(
-        lambda: api(f"/api/2.1/jobs/runs/get?run_id={run_id}"),
-        lambda item: item["state"]["life_cycle_state"] in {"TERMINATED", "SKIPPED", "INTERNAL_ERROR"},
-    )
-    if run["state"].get("result_state") != "SUCCESS":
-        raise RuntimeError("Processing job did not succeed")
+    def run_job(job_id, role):
+        run_id = api("/api/2.1/jobs/run-now", {"job_id": job_id})["run_id"]
+        run = wait_for(
+            lambda: api(f"/api/2.1/jobs/runs/get?run_id={run_id}"),
+            lambda item: item["state"]["life_cycle_state"] in {"TERMINATED", "SKIPPED", "INTERNAL_ERROR"},
+        )
+        if run["state"].get("result_state") != "SUCCESS":
+            raise RuntimeError(f"{role} job did not succeed")
+        return run_id
 
     def sql(statement, **parameters):
         result = api("/api/2.0/sql/statements", {
@@ -74,6 +77,7 @@ def main():
             )
         return result
 
+    job_run_id = run_job(processing_job_id, "Processing")
     publication = sql(f"""
         SELECT latest.run_id
         FROM {catalog}.gold.latest_publication AS latest
@@ -84,16 +88,26 @@ def main():
               AND event.trigger_type = 'manual'
               AND event.status IN ('published', 'skipped_duplicate')
         )
-    """, job_run_id=run_id)
+    """, job_run_id=job_run_id)
     rows = publication.get("result", {}).get("data_array", [])
     if publication["status"]["state"] != "SUCCEEDED" or len(rows) != 1:
         raise RuntimeError("The processing invocation did not produce or reuse the current publication")
+    published_run_id = rows[0][0]
     lineage = sql(
         f"SELECT 1 FROM {catalog}.gold.current_lineage WHERE run_id = :run_id LIMIT 1",
-        run_id=rows[0][0],
+        run_id=published_run_id,
     )
     if lineage["status"]["state"] != "SUCCEEDED" or not lineage.get("result", {}).get("data_array"):
         raise RuntimeError("Expected published Gold lineage for the processing invocation")
+    run_job(evaluation_job_id, "Evaluation")
+    accuracy = sql(f"""
+        SELECT 1 FROM {catalog}.gold.current_extraction_accuracy
+        WHERE run_id = :run_id AND form_type = 'W-2' AND variant = 'digital'
+          AND expected_count > 0 AND exact_match_count BETWEEN 0 AND expected_count
+        LIMIT 1
+    """, run_id=published_run_id)
+    if accuracy["status"]["state"] != "SUCCEEDED" or not accuracy.get("result", {}).get("data_array"):
+        raise RuntimeError("Expected valid digital W-2 accuracy for the processing invocation")
     for table in ("silver.fields", "eval.answer_key"):
         result = sql(f"SELECT 1 FROM {catalog}.{table} LIMIT 1")
         error = result["status"].get("error", {})
@@ -101,7 +115,7 @@ def main():
             "PERMISSION_DENIED", "INSUFFICIENT_PERMISSIONS",
         }:
             raise RuntimeError(f"Expected an explicit permission denial for {table}")
-    print("Processing job, Gold publication and lineage, and Silver/eval denial checks passed")
+    print("Processing and evaluation jobs, Gold publication, lineage and accuracy, and Silver/eval denials passed")
 
 
 if __name__ == "__main__":

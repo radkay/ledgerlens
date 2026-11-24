@@ -35,7 +35,7 @@ resources:
           spec:
             environment_version: '6'
       tasks:
-        - task_key: bootstrap
+        - task_key: evaluate
           environment_key: standard
           spark_python_task:
             python_file: ../src/ledgerlens/bootstrap_job.py

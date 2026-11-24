@@ -9,6 +9,7 @@ Proposed for Ron's approval before parallel implementation. All data is syntheti
 | Catalog | ledgerlens_dev | ledgerlens_demo |
 | GitHub environment | ledgerlens-dev | ledgerlens-demo |
 | Credentialed workflow ref | dev | main |
+| GitHub repository readiness variable | LEDGERLENS_INTEGRATION_READY_DEV | LEDGERLENS_INTEGRATION_READY_DEMO |
 | Processing job | ledgerlens-dev-process | ledgerlens-demo-process |
 | Processing job identity | ledgerlens-dev-processor | ledgerlens-demo-processor |
 | Evaluation job | ledgerlens-dev-evaluate | ledgerlens-demo-evaluate |
@@ -35,7 +36,7 @@ Configure jobs with their matching run-as identities. Use Delta append-only prop
 
 The credentialed integration workflow deploys the matching bundle before running the processing job. On dev, ledgerlens-dev-ci deploys and owns the dev jobs. On main, ledgerlens-demo-evidence deploys and owns the demo jobs. Both deployers use workspace access without an administrator role and grant their processor and evaluator read access to the deployed source files. The workflow resolves the processing job ID from the matching bundle deployment state.
 
-GitHub environment secret: DATABRICKS_CLIENT_SECRET. Environment variables: DATABRICKS_HOST, DATABRICKS_CLIENT_ID, DATABRICKS_WAREHOUSE_ID, DATABRICKS_PROCESSOR_APPLICATION_ID, DATABRICKS_EVALUATOR_APPLICATION_ID. Streamlit Community Cloud receives the demo reader's corresponding host, client ID, secret and warehouse ID. Authenticated operator actions use Ron’s delegated Databricks user identity and require membership in the matching reviewer group. The public app uses only the reader identity. The repository variable LEDGERLENS_INTEGRATION_READY is false or unset until both environments are provisioned and ready for the live smoke test. A host-managed Databricks App principal receives reader grants once its resolved identity is recorded. Record the actual hosted model endpoint and managed dbsql MCP endpoint before claiming hands-on use.
+GitHub environment secret: DATABRICKS_CLIENT_SECRET. Environment variables: DATABRICKS_HOST, DATABRICKS_CLIENT_ID, DATABRICKS_WAREHOUSE_ID, DATABRICKS_PROCESSOR_APPLICATION_ID, DATABRICKS_EVALUATOR_APPLICATION_ID. Streamlit Community Cloud receives the demo reader's corresponding host, client ID, secret and warehouse ID. Authenticated operator actions use Ron’s delegated Databricks user identity and require membership in the matching reviewer group. The public app uses only the reader identity. Each repository readiness variable is false or unset until its own environment is provisioned and its workflow can deploy and run the publication-capable jobs for the live smoke test. A host-managed Databricks App principal receives reader grants once its resolved identity is recorded. Record the actual hosted model endpoint and managed dbsql MCP endpoint before claiming hands-on use.
 
 ## Tables
 

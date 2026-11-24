@@ -41,7 +41,16 @@ The script creates catalogs, schemas, volumes, tables, views, masks and reviewer
 
 In a fresh radkay-lab serverless notebook, leave the environment on its workspace default, record the Environment panel version, and run `import sys; print(sys.version.split()[0])`. Expected results are Standard v6 and Python 3.12.3. Record the observed version and date in D-011. Run each bundled bootstrap task as its configured job identity and capture its runtime and access result. [Databricks serverless environment v6](https://docs.databricks.com/aws/en/release-notes/serverless/environment-version/six)
 
-Create GitHub environments ledgerlens-dev and ledgerlens-demo with Selected branches and tags set to dev only and main only respectively. Enter DATABRICKS_CLIENT_SECRET for ledgerlens-dev-ci or ledgerlens-demo-evidence respectively. Set the five matching environment variables from CONTRACT.md, including the application IDs of the processor and evaluator. Leave repository variable LEDGERLENS_INTEGRATION_READY unset or false until both environments, credentials, role grants, fixtures and publication-capable tasks are ready. Set it to true to enable post-merge integration on relevant paths and manual dispatch from main.
+Create GitHub environments ledgerlens-dev and ledgerlens-demo with Selected branches and tags set to dev only and main only respectively. Enter DATABRICKS_CLIENT_SECRET for ledgerlens-dev-ci or ledgerlens-demo-evidence respectively. Set the five matching environment variables from CONTRACT.md, including the application IDs of the processor and evaluator.
+
+Set each readiness variable under **Settings → Secrets and variables → Actions → Variables** when its own catalog, fixtures, credentials, role grants, and publication-capable job definitions are ready. The workflow deploys the jobs on the first eligible run. Leave each variable unset or false until its environment is ready.
+
+| Repository variable | Set to `true` when | Eligible runs |
+|---|---|---|
+| `LEDGERLENS_INTEGRATION_READY_DEV` | `ledgerlens_dev` and its dev bundle are ready | Pushes to `dev` that match the integration workflow's path filter |
+| `LEDGERLENS_INTEGRATION_READY_DEMO` | `ledgerlens_demo` and its demo bundle are ready | Matching pushes to `main` and manual dispatch from `main` |
+
+Each new variable takes effect once the workflow change reaches its branch. Keep the legacy `LEDGERLENS_INTEGRATION_READY` unset or false while any protected branch still runs the earlier workflow.
 
 Create external reader OAuth credentials only for the Community Cloud demo reader and enter them directly there. Verify GitHub Actions and Streamlit OAuth independently. Verify the processor can read expected forms, the evaluator can read the private answer key, and the reader and integration identity are denied access to sensitive tables. Verify the managed dbsql MCP call before publishing claims.
 

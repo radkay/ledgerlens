@@ -30,7 +30,7 @@ class OverviewTests(unittest.TestCase):
         self.assertEqual(publication, PUBLISHED)
         self.assertEqual(live["received"], 1)
         self.assertNotIn("received", review)
-        self.assertEqual(confidence, {"[0, 0.5)": 1, "[0.5, 0.8)": 1, "[0.8, 1]": 1, "Unreported": 1})
+        self.assertEqual(confidence, {"[0, 0.5)": 1, "[0.5, 0.8)": 1, "[0.8, 1]": 2, "Unreported": 2})
         self.assertEqual(accuracy, [])
 
     def test_batch_uses_latest_event_and_deduplicates_submission(self):

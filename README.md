@@ -60,19 +60,19 @@ The offline plan prints catalog DDL. To rebuild in Databricks, create the docume
 ## Build metrics
 
 <!-- build-metrics:start -->
-Snapshot through **2026-11-25 04:01 UTC**. **48 merged PRs** over **7h 44m** from the first merge (2026-11-24 20:16 UTC) to the latest.
+Snapshot through **2026-11-25 04:36 UTC**. **55 merged PRs** over **8h 20m** from the first merge (2026-11-24 20:16 UTC) to the latest.
 
 | Lane | Merged PRs |
 |---|---:|
-| first | 22 |
+| first | 26 |
 | extraction | 6 |
-| processing | 7 |
-| app | 9 |
-| governance | 2 |
+| processing | 8 |
+| app | 10 |
+| governance | 3 |
 | mcp | 2 |
 
-- **PR Metrics coverage.** 48/48 merged PRs have a Metrics section in their body.
-- **PR CI.** 180 distinct workflow runs linked to 48 merged PRs. 132 were additional event runs after a PR's first run and 0 were retries of the same run ID. 81 cancelled, 12 failure, 87 success.
+- **PR Metrics coverage.** 55/55 merged PRs have a Metrics section in their body.
+- **PR CI.** 219 distinct workflow runs linked to 55 merged PRs. 164 were additional event runs after a PR's first run and 0 were retries of the same run ID. 101 cancelled, 19 failure, 99 success.
 - **Review.** 14 findings in [REVIEW-LOG.md](docs/REVIEW-LOG.md).
 
 CI totals use GitHub Actions rather than free-text counts in PR bodies. Runs are matched by head branch and time from PR creation through merge. They cover merged PRs only. Canceled workflow runs are reported separately from failures. 0 runs with ambiguous matches were excluded. 0 merged PRs have no matching run in the returned history.

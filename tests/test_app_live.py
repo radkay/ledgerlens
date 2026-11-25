@@ -63,6 +63,19 @@ class LiveAdapterTests(unittest.TestCase):
         self.assertEqual({item["name"]: item["value"] for item in request["parameters"]},
                          {"run_id": "publication-1", "gold_row_id": "row-1", "output_field": "wages"})
 
+    def test_prefill_reads_only_the_selected_form_in_the_pinned_publication(self):
+        self.workspace.responses = [
+            result([["fixture-person", "2025", "W-2"]]),
+            result([["gold-1", "fixture-person", "2025", "W-2", "wages", "25000.00"]]),
+        ]
+        reader = GoldReader(self.reader_sql, "demo")
+        form = reader.prefill_forms("publication-1")[0]
+        self.assertEqual(reader.prefill("publication-1", form)[0].output_value, "25000.00")
+        statement = self.workspace.calls[-1][3]["json"]
+        self.assertEqual({item["name"]: item["value"] for item in statement["parameters"]},
+                         {"run_id": "publication-1", "person_key": "fixture-person",
+                          "tax_year": "2025", "form_type": "W-2"})
+
     def test_batch_uses_delegated_token_explicit_job_and_ops_events(self):
         self.workspace.responses = [
             {"settings": {"name": "ledgerlens-dev-process", "max_concurrent_runs": 1}},

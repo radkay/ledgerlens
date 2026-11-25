@@ -78,8 +78,11 @@ class FixtureReader:
             raise ValueError("Select a source document or one Gold output field.")
         return [FIXTURE_LINEAGE] if run_id == PUBLISHED.run_id and matches else []
 
-    def prefill(self, run_id):
-        return [FIXTURE_PREFILL] if run_id == PUBLISHED.run_id else []
+    def prefill_forms(self, run_id):
+        return [FIXTURE_PREFILL.form] if run_id == PUBLISHED.run_id else []
+
+    def prefill(self, run_id, form):
+        return [FIXTURE_PREFILL] if run_id == PUBLISHED.run_id and form == FIXTURE_PREFILL.form else []
 
 
 class FixtureBatch:

@@ -83,5 +83,9 @@ class WorkbenchTests(unittest.TestCase):
         operator.append_decision(decision, RELEASED.state_at)
         self.assertEqual(operator.document(RELEASED.doc_id).status, "released")
         self.assertEqual(reader.lineage(run_id, doc_id=RELEASED.doc_id), lines)
-        self.assertEqual(json.loads(prefill_document(publication, reader.prefill(run_id)))["fields"],
-                         {"wages": "25000.00"})
+        form = reader.prefill_forms(run_id)[0]
+        self.assertEqual(reader.prefill("unpublished", form), [])
+        self.assertEqual(reader.prefill(run_id, replace(form, tax_year=2024)), [])
+        artifact = json.loads(prefill_document(publication, reader.prefill(run_id, form)))
+        self.assertEqual(artifact["fields"], {"wages": "25000.00"})
+        self.assertEqual(artifact["published_at"], publication.published_at.isoformat())

@@ -216,7 +216,7 @@ def live_audit(args):
     ron = provision.require_ron(args)
     provision.require_shared_warehouse(args)
     roles = {
-        env: policy(env, history=args.published_history, identifiers=args.identifier_readers,
+        env: policy(env, history=env in args.published_history, identifiers=env in args.identifier_readers,
                     hosted_app=args.hosted_app)
         for env in ("dev", "demo")
     }
@@ -265,8 +265,10 @@ def live_main():
     parser.add_argument("--workspace-profile", required=True)
     parser.add_argument("--warehouse-id", required=True)
     parser.add_argument("--ron-user", required=True)
-    parser.add_argument("--published-history", action="store_true")
-    parser.add_argument("--identifier-readers", action="store_true")
+    parser.add_argument("--published-history", nargs="+", choices=("dev", "demo"), default=(),
+                        help="Catalogs where the published history views have been applied")
+    parser.add_argument("--identifier-readers", nargs="+", choices=("dev", "demo"), default=(),
+                        help="Catalogs where identifier reader governance has been applied")
     parser.add_argument("--hosted-app", action="store_true")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]+", args.warehouse_id):

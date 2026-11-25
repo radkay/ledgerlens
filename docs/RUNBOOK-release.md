@@ -7,9 +7,20 @@ Ron runs these steps in his separate administrator terminal and browser. The Bui
 Keep both Processing schedules paused. Use the same reviewed `dev` SHA for both catalogs and the release PR. [#51](https://github.com/radkay/ledgerlens/pull/51) adds published history and changes `current_*` to the latest snapshot. Match the schema and consumers in this order.
 
 1. **Prepare the repository.** The [App in #68](https://github.com/radkay/ledgerlens/pull/68) and the [MCP implementation from #63](https://github.com/radkay/ledgerlens/pull/63) pin a run on the `published_*` views. Land their code together to share one standard dev integration run. Keep the new reader surfaces inactive and `LEDGERLENS_MCP_SMOKE_READY_DEV` unset. [#67](https://github.com/radkay/ledgerlens/pull/67) keeps standard smoke on the currently provisioned view family until its environment flag changes.
-2. **Approve masking if it is in this release.** [#52](https://github.com/radkay/ledgerlens/pull/52) follows the App's exact-token regression and CODEOWNERS approval on its merge head. Include it in the reviewed SHA before provisioning if its migration is part of this release. The identifier reader groups start empty.
-3. **At 6 a.m., apply dev first.** Run the regular dev command below. Verify the new Gold views and dev reader and CI grants. If the SHA contains #52, verify both Silver mask bindings and the workbench's exact last-four token. Set `LEDGERLENS_SMOKE_PUBLISHED_VIEWS=true` in the `ledgerlens-dev` GitHub environment only after those checks. Defer optional live dev probes until their credentials and endpoints are configured and the demo quota is reserved.
+2. **Approve masking if it is in this release.** [#52](https://github.com/radkay/ledgerlens/pull/52) follows the App's exact-token regression and CODEOWNERS approval on its merge head. Include it in the reviewed SHA before provisioning if its migration is part of this release. Provisioning creates `ledgerlens-dev-identifier-readers` and `ledgerlens-demo-identifier-readers` without members. Ron manages membership explicitly.
+3. **At 6 a.m., apply dev first.** Run the regular dev command below. Verify the new Gold views and dev reader and CI grants. Verify both Silver mask bindings and repeat the following identity checks after the demo apply. Set `LEDGERLENS_SMOKE_PUBLISHED_VIEWS=true` in the `ledgerlens-dev` GitHub environment only after those checks. Defer optional live dev probes until their credentials and endpoints are configured and the demo quota is reserved.
 4. **Apply demo second.** When the App consumers are release-ready, run the regular demo command from the same SHA. Confirm the demo views and grants. If reviewed [#65](https://github.com/radkay/ledgerlens/pull/65) is in the SHA and the hosted App will be enabled, run its app-only reader grant after the regular demo apply. Then set `LEDGERLENS_SMOKE_PUBLISHED_VIEWS=true` in `ledgerlens-demo`. Ron merges the release with a merge commit and confirms the one demo run before deploying the new reader surface.
+
+### Identifier masking checks
+
+| Identity and surface | Expected identifier value |
+|---|---|
+| Matching identifier-readers group querying either Silver value column | Full value |
+| Matching reviewer group in the workbench, including a reviewer with full-value group membership | Safe last-four token, such as `****1234` |
+| Other identities that are granted access to Silver | `NULL` |
+| Silver on the public reader or CI identity | Query denied |
+
+Use only synthetic records for verification. Confirm the last-four projection on both value columns and confirm the workbench masks malformed values.
 
 ## 1. Reconcile dev, then demo
 

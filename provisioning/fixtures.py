@@ -3,6 +3,7 @@
 import hashlib
 import zlib
 from contextlib import closing
+from io import BytesIO
 
 
 def synthetic_identifier(kind, serial):
@@ -138,17 +139,61 @@ def scanned_fixtures():
     return fixtures
 
 
+def identifier_preview_fixtures():
+    """Return two-page W-2 variants with identifiers in supplemental text."""
+    from pypdf import PdfReader, PdfWriter
+
+    person = "fixture-person-preview"
+    items = [
+        ("Employee SSN", "employee_ssn", synthetic_identifier("ssn", 8101)),
+        ("Employer EIN", "employer_ein", synthetic_identifier("ein", 8101)),
+        ("Wages", "wages", "36000.00"),
+    ]
+    pages = (
+        form_lines("W-2", person, items),
+        [
+            "Synthetic attachment - archival references",
+            f"Prior employee reference: {synthetic_identifier('ssn', 8102)}",
+            f"Prior employer reference: {synthetic_identifier('ein', 8102)}",
+        ],
+    )
+    writer = PdfWriter()
+    for lines in pages:
+        writer.append_pages_from_reader(PdfReader(BytesIO(digital_w2(lines)), strict=True))
+    with BytesIO() as output:
+        writer.write(output)
+        digital = output.getvalue()
+
+    fields = {name: value for _, name, value in items}
+    return [
+        fixture_entry(pdf, f"preview-w2-{variant}", "W-2", person, ["W-2"], fields, variant)
+        for pdf, variant in ((digital, "digital"), (_raster_pdf(digital), "scanned"))
+    ]
+
+
 def _raster_pdf(digital_pdf):
     from pypdfium2 import PdfDocument
 
-    # The source fixtures are one page. Render at 144 dpi and discard the source objects.
-    with PdfDocument(digital_pdf) as source, closing(source[0]) as page:
-        with closing(page.render(scale=2, grayscale=True)) as bitmap:
-            width, height = bitmap.width, bitmap.height
-            pixels = b"".join(
-                bytes(bitmap.buffer[row:row + width])
-                for row in range(0, height * bitmap.stride, bitmap.stride)
-            )
+    with PdfDocument(digital_pdf) as source:
+        page_refs = " ".join(f"{3 + 3 * index} 0 R" for index in range(len(source)))
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            f"<< /Type /Pages /Kids [{page_refs}] /Count {len(source)} >>".encode("ascii"),
+        ]
+        for index in range(len(source)):
+            with closing(source[index]) as page:
+                objects.extend(_raster_page_objects(page, len(objects) + 2))
+    return _serialize_pdf(objects)
+
+
+def _raster_page_objects(page, image_ref):
+    # Render synthetic Letter pages at 144 dpi, keeping only the raster.
+    with closing(page.render(scale=2, grayscale=True)) as bitmap:
+        width, height = bitmap.width, bitmap.height
+        pixels = b"".join(
+            bytes(bitmap.buffer[row:row + width])
+            for row in range(0, height * bitmap.stride, bitmap.stride)
+        )
 
     compressed = zlib.compress(pixels, level=9)
     image_header = (
@@ -157,11 +202,12 @@ def _raster_pdf(digital_pdf):
         f"/Length {len(compressed)} >>\nstream\n"
     )
     draw = b"q 612 0 0 792 0 0 cm /Scan Do Q"
-    return _serialize_pdf((
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
-        b"/Resources << /XObject << /Scan 4 0 R >> >> /Contents 5 0 R >>",
+    return (
+        (
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            f"/Resources << /XObject << /Scan {image_ref} 0 R >> >> "
+            f"/Contents {image_ref + 1} 0 R >>"
+        ).encode("ascii"),
         image_header.encode("ascii") + compressed + b"\nendstream",
         f"<< /Length {len(draw)} >>\nstream\n".encode("ascii") + draw + b"\nendstream",
-    ))
+    )

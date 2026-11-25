@@ -1,6 +1,6 @@
 # LedgerLens Streamlit app
 
-The app starts with its bundled synthetic publication. The overview separates current document state from snapshot-based confidence, review volume and extraction accuracy. Published outputs includes forward and reverse lineage and PDF and JSON downloads of the selected pre-filled form.
+The app starts with its bundled synthetic publication. The overview separates current document state from snapshot-based confidence, review volume and extraction accuracy. Published outputs includes expected-document coverage, released person-year totals, forward and reverse lineage, and PDF and JSON downloads of the selected pre-filled form.
 
 ## Run locally
 

@@ -10,6 +10,12 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 
+# Both objects are required by CONTRACT.md and provisioned in each catalog.
+PROTECTED_TABLES = ("silver.fields", "eval.answer_key")
+PERMISSION_CODES = ("PERMISSION_DENIED", "INSUFFICIENT_PERMISSIONS")
+HIDDEN_OBJECT_CODES = ("TABLE_OR_VIEW_NOT_FOUND", "SCHEMA_NOT_FOUND")
+
+
 TASK_ERROR = re.compile(
     r"(?:Processing|Evaluation) job failed \([A-Za-z_][A-Za-z0-9_.]{0,79}\)"
     r"|ModuleNotFoundError: No module named '[A-Za-z_][A-Za-z0-9_.]{0,79}'"
@@ -55,21 +61,36 @@ def task_error(api, run):
     return ", ".join(details)
 
 
-def verify_permission_denial(table, status):
+def verify_permission_denial(table, status, *, credentials=()):
     state = status["state"]
     error = status.get("error", {})
     code = error.get("error_code")
     sql_state = error.get("sql_state")
-    # Report structured fields only. SQL error messages can include sensitive data.
+    message = error.get("message")
+    # Databricks may put the SQL error condition in the statement message.
+    condition = None
+    if isinstance(message, str) and message.strip():
+        line = message.lstrip().splitlines()[0]
+        match = re.match(r"^(?:\[([A-Z][A-Z0-9_]{1,79})\]|([A-Z][A-Z0-9_]{1,79}):)", line)
+        if match:
+            condition = match.group(1) or match.group(2)
+        for credential in credentials:
+            if credential:
+                line = line.replace(credential, "***")
+        printable = "".join(c if c.isprintable() else " " for c in line[:240])
+        suffix = "…" if len(line) > 240 else ""
+        print(f"SQL denial probe for {table}: {printable}{suffix}", flush=True)
     details = [f"state={state}"]
     if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{1,79}", code):
         details.append(f"error_code={code}")
     if isinstance(sql_state, str) and re.fullmatch(r"[A-Z0-9]{5}", sql_state):
         details.append(f"sql_state={sql_state}")
     summary = ", ".join(details)
-    if state == "FAILED" and (
-        sql_state == "42501" or code in ("PERMISSION_DENIED", "INSUFFICIENT_PERMISSIONS")
-    ):
+    explicit_denial = sql_state == "42501" or code in PERMISSION_CODES or condition in PERMISSION_CODES
+    hidden_table = table in PROTECTED_TABLES and (
+        code in HIDDEN_OBJECT_CODES or condition in HIDDEN_OBJECT_CODES
+    )
+    if state == "FAILED" and (explicit_denial or hidden_table):
         print(f"Permission denial confirmed for {table} ({summary})", flush=True)
         return
     raise RuntimeError(f"Expected an explicit permission denial for {table} ({summary})")
@@ -174,9 +195,9 @@ def main():
     """, run_id=published_run_id)
     if accuracy["status"]["state"] != "SUCCEEDED" or not accuracy.get("result", {}).get("data_array"):
         raise RuntimeError("Expected valid digital W-2 accuracy for the processing invocation")
-    for table in ("silver.fields", "eval.answer_key"):
+    for table in PROTECTED_TABLES:
         result = sql(f"SELECT 1 FROM {catalog}.{table} LIMIT 1")
-        verify_permission_denial(table, result["status"])
+        verify_permission_denial(table, result["status"], credentials=(secret, auth, token))
     print("Processing and evaluation jobs, Gold publication, lineage and accuracy, and Silver/eval denials passed")
 
 

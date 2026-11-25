@@ -8,7 +8,9 @@ from pathlib import Path
 
 from .adapters import ExtractorPlan, managed_extractor_plan
 from .replay import canonical_decisions, classify, fingerprint, replay
-from .snapshot import GRAINS, MetadataError, build_snapshot, metadata, silver_projection
+from .snapshot import (
+    GRAINS, MetadataError, build_snapshot, metadata, silver_projection, validate_gold_lineage,
+)
 from .storage import MAX_ROWS, DeltaStore, ensure_rows, unique
 
 DOCUMENTS = "bronze.documents"
@@ -225,6 +227,7 @@ def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigge
         )
         phase = "snapshot_validation"
         tables = build_snapshot(run_id, states, inventory)
+        validate_gold_lineage(tables, inventory)
         for table, rows in tables.items():
             projection = {"silver.fields": silver_projection}.get(table)
             options = {"projection": projection} if projection else {}

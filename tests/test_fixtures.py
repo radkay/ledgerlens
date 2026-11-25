@@ -4,7 +4,7 @@ import unittest
 from io import BytesIO
 
 from provisioning.fixtures import (
-    bootstrap_fixture, digital_fixtures, scanned_fixtures, synthetic_identifier,
+    bootstrap_fixture, digital_fixtures, identifier_preview_fixtures, scanned_fixtures, synthetic_identifier,
 )
 from src.ledgerlens.extraction import extract_digital_pdf, field_id
 
@@ -50,7 +50,6 @@ class SyntheticFixtureTests(unittest.TestCase):
                     if name.endswith("_tin"):
                         self.assertRegex(field["expected_value"], r"^00-\d{7}$")
 
-
     def test_scanned_fixtures_are_raster_only_and_have_separate_identities(self):
         from pypdf import PdfReader
 
@@ -95,3 +94,47 @@ class SyntheticFixtureTests(unittest.TestCase):
                         self.assertRegex(value, r"^000-\d{2}-\d{4}$")
                     if name.endswith(("_ein", "_tin")):
                         self.assertRegex(value, r"^00-\d{7}$")
+
+
+    def test_preview_fixtures_include_noncanonical_identifiers_on_a_second_page(self):
+        from pypdf import PdfReader
+
+        fixtures = identifier_preview_fixtures()
+        self.assertEqual(fixtures, identifier_preview_fixtures())
+        (digital_pdf, digital), (scan_pdf, scanned) = fixtures
+        for pdf, manifest in fixtures:
+            self.assertEqual(manifest["sha256"], hashlib.sha256(pdf).hexdigest())
+            self.assertEqual(manifest["filename"], manifest["sha256"] + ".pdf")
+        self.assertEqual((digital["variant"], scanned["variant"]), ("digital", "scanned"))
+        self.assertNotEqual(digital["sha256"], scanned["sha256"])
+
+        record = extract_digital_pdf(digital_pdf, digital["sha256"], "preview-test")
+        self.assertEqual(record["status"], "extracted")
+        front, attachment = json.loads(record["raw_json"])["pages"]
+        values = {
+            field["field_name"]: field["extracted_value"]
+            for field in json.loads(record["fields_json"])
+        }
+        self.assertEqual(values, {
+            field["field_name"]: field["expected_value"] for field in digital["fields"]
+        })
+        for kind in ("ssn", "ein"):
+            extra = synthetic_identifier(kind, 8102)
+            self.assertNotIn(extra, front)
+            self.assertIn(extra, attachment)
+            self.assertNotIn(extra, values.values())
+            self.assertNotIn(extra.encode("ascii"), scan_pdf)
+
+        scan = PdfReader(BytesIO(scan_pdf), strict=True)
+        self.assertEqual(len(scan.pages), 2)
+        self.assertIsNone(scan.metadata)
+        images = []
+        for page in scan.pages:
+            self.assertEqual(page.extract_text(), "")
+            self.assertEqual(set(page["/Resources"]), {"/XObject"})
+            image = page["/Resources"]["/XObject"]["/Scan"]
+            self.assertEqual(image["/Subtype"], "/Image")
+            pixels = image.get_data()
+            self.assertLess(min(pixels), 32)
+            images.append(pixels)
+        self.assertNotEqual(*images)

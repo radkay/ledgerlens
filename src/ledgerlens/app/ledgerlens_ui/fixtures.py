@@ -88,10 +88,18 @@ class FixtureBatch:
     def schedule(self):
         return None
 
+    def active_job_run(self):
+        now = self.clock()
+        return next((job_run_id for job_run_id, started in self.runs.items()
+                     if (now - started).total_seconds() < 6), None)
+
+    def terminal_job_state(self, job_run_id):
+        return None
+
     def run_batch(self, request_id):
         if request_id in self.requests:
             return self.requests[request_id]
-        if any((self.clock() - started).total_seconds() < 6 for started in self.runs.values()):
+        if self.active_job_run():
             raise ValueError("A fixture batch is already running.")
         job_run_id = str(uuid4())
         self.requests[request_id] = job_run_id

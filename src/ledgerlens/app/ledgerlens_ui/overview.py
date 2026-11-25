@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import streamlit as st
 
-from .dashboard import read_batch_activity, read_overview
+from .dashboard import CONFIDENCE_BUCKETS, read_batch_activity, read_overview
 
 POLL_INTERVAL_SECONDS = 2
 POLL_WINDOW_SECONDS = 120
@@ -26,12 +26,7 @@ def show_overview(reader):
     if review:
         st.table([{"State": state, "Documents": count} for state, count in review.items()])
 
-    st.subheader("Extraction confidence")
-    if confidence is None:
-        st.info("Confidence distribution is pending for this publication.")
-    else:
-        st.bar_chart({"Confidence": list(confidence), "Fields": list(confidence.values())},
-                     x="Confidence", y="Fields", sort=False)
+    show_confidence(confidence)
 
     st.subheader("Extraction accuracy")
     if not accuracy:
@@ -42,6 +37,20 @@ def show_overview(reader):
             "Exact matches": row.exact_match_count, "Expected fields": row.expected_count,
             "Accuracy": f"{row.exact_match_count / row.expected_count:.1%}" if row.expected_count else "—",
         } for row in accuracy])
+
+
+def show_confidence(rows):
+    st.subheader("Extraction confidence")
+    if not rows:
+        st.info("Confidence distribution is pending for this publication.")
+        return
+
+    forms = sorted({row.form_type for row in rows})
+    form_type = st.selectbox("Confidence form type", forms)
+    counts = {row.bucket: row.count for row in rows if row.form_type == form_type}
+    st.metric("Released fields", sum(counts.values()))
+    st.bar_chart({"Confidence": CONFIDENCE_BUCKETS, "Fields": [counts.get(bucket, 0) for bucket in CONFIDENCE_BUCKETS]},
+                 x="Confidence", y="Fields", sort=False)
 
 
 def show_batches(operator=None, authorize=lambda: False):

@@ -2,18 +2,14 @@
 
 from collections import defaultdict
 from dataclasses import asdict
+import re
 from datetime import UTC, datetime
 
-from .dashboard import Accuracy, PipelineEvent, Publication, Schedule
-from .fixtures import ASSETS
+from .dashboard import Accuracy, Confidence, PipelineEvent, Publication, Schedule
 from .outputs import ExpectedDocument, Form, GoldValue, Lineage, PersonYear, Prefill
 from .workbench import Field, ReviewDocument, validate_decision
 
 CATALOGS = {"dev": "ledgerlens_dev", "demo": "ledgerlens_demo"}
-BOOTSTRAP_PREVIEWS = {
-    # The masked copy of the repository's deterministic digital W-2 fixture.
-    "65912382990c61f773d6b2a109533c7e43d657c8dc52c597e40973b071d23dd8": ASSETS / "bootstrap-w2-masked.pdf",
-}
 ROWS_LIMIT = 10_000
 
 
@@ -69,22 +65,25 @@ class GoldReader:
         return {status: int(count) for status, count in rows}
 
     def review_summary(self, run_id):
-        rows = self.sql.execute(f"""SELECT status, document_count FROM {self.gold}.current_review_summary
+        rows = self.sql.execute(f"""SELECT status, document_count FROM {self.gold}.published_review_summary
                                     WHERE run_id = :run_id ORDER BY status""", run_id=run_id)
         return {status: int(count) for status, count in rows}
 
-    def confidence_scores(self, run_id):
-        # The contract does not expose confidence aggregates to the Gold reader.
-        return None
+    def confidence_summary(self, run_id):
+        rows = self.sql.execute(f"""
+            SELECT form_type, confidence_bucket, count FROM {self.gold}.published_confidence_summary
+            WHERE run_id = :run_id ORDER BY form_type, confidence_bucket
+        """, run_id=run_id)
+        return [Confidence(form_type, bucket, int(count)) for form_type, bucket, count in rows]
 
     def extraction_accuracy(self, run_id):
         rows = self.sql.execute(f"""SELECT form_type, variant, expected_count, exact_match_count
-                                    FROM {self.gold}.current_extraction_accuracy WHERE run_id = :run_id
+                                    FROM {self.gold}.published_extraction_accuracy WHERE run_id = :run_id
                                     ORDER BY form_type, variant""", run_id=run_id)
         return [Accuracy(form, variant, int(count), int(matches)) for form, variant, count, matches in rows]
 
     def lineage_documents(self, run_id):
-        rows = self.sql.execute(f"""SELECT DISTINCT doc_id FROM {self.gold}.current_lineage
+        rows = self.sql.execute(f"""SELECT DISTINCT doc_id FROM {self.gold}.published_lineage
                                     WHERE run_id = :run_id ORDER BY doc_id""", run_id=run_id)
         return [row[0] for row in rows]
 
@@ -92,7 +91,7 @@ class GoldReader:
         rows = self.sql.execute(f"""
             WITH links AS (
                 SELECT DISTINCT gold_row_id, output_field
-                FROM {self.gold}.current_lineage WHERE run_id = :run_id
+                FROM {self.gold}.published_lineage WHERE run_id = :run_id
             )
             SELECT l.gold_row_id, l.output_field,
                    coalesce(f.output_value, d.status, CASE l.output_field
@@ -104,16 +103,16 @@ class GoldReader:
                        concat_ws(' · ', d.person_key, CAST(d.tax_year AS STRING), d.expected_form)
                    END AS context
             FROM links AS l
-            LEFT JOIN {self.gold}.current_prefill AS f
+            LEFT JOIN {self.gold}.published_prefill AS f
                 ON f.run_id = :run_id AND f.gold_row_id = l.gold_row_id AND f.output_field = l.output_field
-            LEFT JOIN {self.gold}.current_missing_documents AS d
+            LEFT JOIN {self.gold}.published_missing_documents AS d
                 ON d.run_id = :run_id AND d.gold_row_id = l.gold_row_id AND l.output_field = 'status'
-            LEFT JOIN {self.gold}.current_person_year AS p
+            LEFT JOIN {self.gold}.published_person_year AS p
                 ON p.run_id = :run_id AND p.gold_row_id = l.gold_row_id
             UNION ALL
             SELECT d.gold_row_id, 'status', d.status,
                    concat_ws(' · ', d.person_key, CAST(d.tax_year AS STRING), d.expected_form)
-            FROM {self.gold}.current_missing_documents AS d
+            FROM {self.gold}.published_missing_documents AS d
             WHERE d.run_id = :run_id AND NOT EXISTS (
                 SELECT 1 FROM links AS l WHERE l.gold_row_id = d.gold_row_id AND l.output_field = 'status'
             )
@@ -133,7 +132,7 @@ class GoldReader:
         rows = self.sql.execute(f"""
             SELECT gold_row_id, output_field, doc_id, field_id, extraction_id, decision_id,
                    extractor_name, extractor_version, model_name, model_version
-            FROM {self.gold}.current_lineage WHERE run_id = :run_id AND {where}
+            FROM {self.gold}.published_lineage WHERE run_id = :run_id AND {where}
             ORDER BY gold_row_id, output_field, doc_id, field_id
         """, run_id=run_id, **parameters)
         return [Lineage(*row) for row in rows]
@@ -141,7 +140,7 @@ class GoldReader:
     def person_years(self, run_id):
         rows = self.sql.execute(f"""
             SELECT person_key, tax_year, wages, other_income, mortgage_interest
-            FROM {self.gold}.current_person_year WHERE run_id = :run_id
+            FROM {self.gold}.published_person_year WHERE run_id = :run_id
             ORDER BY person_key, tax_year DESC
         """, run_id=run_id)
         return [PersonYear(person, int(year), wages, income, interest)
@@ -150,7 +149,7 @@ class GoldReader:
     def expected_documents(self, run_id):
         rows = self.sql.execute(f"""
             SELECT person_key, tax_year, expected_form, status
-            FROM {self.gold}.current_missing_documents WHERE run_id = :run_id
+            FROM {self.gold}.published_missing_documents WHERE run_id = :run_id
             ORDER BY person_key, tax_year DESC, expected_form
         """, run_id=run_id)
         return [ExpectedDocument(person, int(year), form, status)
@@ -159,7 +158,7 @@ class GoldReader:
     def prefill_forms(self, run_id):
         rows = self.sql.execute(f"""
             SELECT DISTINCT person_key, tax_year, form_type
-            FROM {self.gold}.current_prefill WHERE run_id = :run_id
+            FROM {self.gold}.published_prefill WHERE run_id = :run_id
             ORDER BY form_type, tax_year DESC, person_key
         """, run_id=run_id)
         return [Form(person, int(year), form_type) for person, year, form_type in rows]
@@ -167,7 +166,7 @@ class GoldReader:
     def prefill(self, run_id, form):
         rows = self.sql.execute(f"""
             SELECT gold_row_id, person_key, tax_year, form_type, output_field, output_value
-            FROM {self.gold}.current_prefill
+            FROM {self.gold}.published_prefill
             WHERE run_id = :run_id AND person_key = :person_key
               AND tax_year = CAST(:tax_year AS INT) AND form_type = :form_type
             ORDER BY output_field
@@ -179,7 +178,9 @@ class GoldReader:
 class LiveWorkbench:
     def __init__(self, sql, environment, actor_id):
         self.sql = sql
-        self.review = f"{CATALOGS[environment]}.review"
+        catalog = CATALOGS[environment]
+        self.review = f"{catalog}.review"
+        self.preview_volume = f"/Volumes/{catalog}/review/masked_previews"
         self.actor_id = actor_id
 
     def reasons(self):
@@ -208,9 +209,45 @@ class LiveWorkbench:
         return tuple(ReviewDocument(key, extraction, state_at, status, tuple(fields))
                      for key, (extraction, state_at, status, fields) in documents.items())
 
-    def preview(self, doc_id):
-        path = BOOTSTRAP_PREVIEWS.get(doc_id)
-        return path.read_bytes() if path else None
+    def preview_directory(self, document):
+        if not re.fullmatch(r"[a-f0-9]{64}", document.doc_id):
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", document.extraction_id or ""):
+            return None
+        return f"{self.preview_volume}/{document.doc_id}/{document.extraction_id}"
+
+    def preview_pages(self, document):
+        path = self.preview_directory(document)
+        if path is None:
+            return []
+        pages = set()
+        tokens = set()
+        params = {"page_size": 1000}
+        while True:
+            listing = self.sql.workspace.preview_listing(path, self.sql.token(), params)
+            if listing is None:
+                return sorted(pages)
+            contents = listing.get("contents", [])
+            if not isinstance(contents, list):
+                raise OSError("Databricks returned an invalid preview listing.")
+            for item in contents:
+                name = item.get("name") if isinstance(item, dict) else None
+                match = re.fullmatch(r"(0|[1-9][0-9]{0,8})\.pdf", name) if isinstance(name, str) else None
+                if match and item.get("is_directory") is False:
+                    pages.add(int(match[1]))
+            token = listing.get("next_page_token")
+            if not token:
+                return sorted(pages)
+            if not isinstance(token, str) or token in tokens:
+                raise OSError("Databricks returned an invalid preview listing.")
+            tokens.add(token)
+            params = {"page_size": 1000, "page_token": token}
+
+    def preview(self, document, page_index):
+        path = self.preview_directory(document)
+        if path is None or type(page_index) is not int or page_index < 0:
+            return None
+        return self.sql.workspace.preview_pdf(f"{path}/{page_index}.pdf", self.sql.token())
 
     def append_decision(self, decision, state_at):
         documents = self.documents(decision.doc_id)

@@ -6,7 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
-from .dashboard import Accuracy, PipelineEvent, Publication
+from .dashboard import Accuracy, Confidence, PipelineEvent, Publication, confidence_distribution
 
 from .outputs import ExpectedDocument, GoldValue, Lineage, PersonYear, Prefill
 from .workbench import Field, ReviewDocument, validate_decision
@@ -53,10 +53,12 @@ class FixtureReader:
     def review_summary(self, run_id):
         return {"released": 1, "needs_review": 1, "rejected": 0} if run_id == PUBLISHED.run_id else {}
 
-    def confidence_scores(self, run_id):
+    def confidence_summary(self, run_id):
         if run_id != PUBLISHED.run_id:
-            return None
-        return [field.confidence for doc in FIXTURE_DOCUMENTS for field in doc.fields]
+            return []
+        scores = [field.confidence for field in RELEASED.fields]
+        return [Confidence("W-2", bucket, count)
+                for bucket, count in confidence_distribution(scores).items() if count]
 
     def extraction_accuracy(self, run_id):
         return [Accuracy("W-2", "digital", 4, 3)] if run_id == PUBLISHED.run_id else []
@@ -186,8 +188,15 @@ class FixtureWorkbench:
                 document = replace(document, status=status, state_at=decision.decided_at)
         return document
 
-    def preview(self, doc_id):
-        return FIXTURE_PDFS.get(doc_id)
+    def preview_pages(self, document):
+        if document.doc_id in FIXTURE_PDFS and document.extraction_id:
+            return [0]
+        return []
+
+    def preview(self, document, page_index):
+        if page_index in self.preview_pages(document):
+            return FIXTURE_PDFS[document.doc_id]
+        return None
 
     def append_decision(self, decision, state_at):
         if decision.actor_id != self.actor_id:

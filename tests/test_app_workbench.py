@@ -36,7 +36,9 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(replace(field, extracted_value="000123456").masked().extracted_value, "[masked]")
         self.assertEqual(Field("field", "notes", "SSN 000-12-3456", None, None).masked().extracted_value,
                          "SSN [masked]")
-        self.assertIn(b"Employee SSN: [masked]", operator.preview(before.doc_id))
+        self.assertIn(b"Employee SSN: [masked]", operator.preview(before, 0))
+        self.assertEqual(operator.preview_pages(before), [0])
+        self.assertIsNone(operator.preview(before, 1))
         decision = Decision("decision-1", before.doc_id, before.extraction_id, field.field_id,
                             "correct_field", "extraction_error", "000-12-3456", "operator", before.state_at)
         with self.assertRaises(ValueError):

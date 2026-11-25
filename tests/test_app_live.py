@@ -1,10 +1,10 @@
 import unittest
 from datetime import UTC, datetime
 
-from provisioning.fixtures import bootstrap_fixture
-from src.ledgerlens.app.ledgerlens_ui.dashboard import latest_batch_event, read_overview
+from dataclasses import replace
+from src.ledgerlens.app.ledgerlens_ui.dashboard import Confidence, latest_batch_event, read_overview
 from src.ledgerlens.app.ledgerlens_ui.live import GoldReader, LiveBatch, LiveWorkbench, Sql
-from src.ledgerlens.app.ledgerlens_ui.workbench import Decision
+from src.ledgerlens.app.ledgerlens_ui.workbench import Decision, ReviewDocument
 
 
 class Workspace:
@@ -16,6 +16,12 @@ class Workspace:
     def call(self, method, path, token, **kwargs):
         self.calls.append((method, path, token, kwargs))
         return self.responses.pop(0)
+
+    def preview_listing(self, path, token, params):
+        return self.call("LIST", path, token, params=params)
+
+    def preview_pdf(self, path, token):
+        return self.call("PDF", path, token)
 
 
 def result(rows):
@@ -34,6 +40,7 @@ class LiveAdapterTests(unittest.TestCase):
             result([["publication-1", "7", self.timestamp.isoformat()]]),
             result([["received", "2"], ["released", "1"]]),
             result([["needs_review", "3"]]),
+            result([["W-2", "[0.8, 1]", "2"]]),
             result([]),
         ]
         reader = GoldReader(self.reader_sql, "demo")
@@ -41,12 +48,15 @@ class LiveAdapterTests(unittest.TestCase):
         self.assertEqual(publication.run_id, "publication-1")
         self.assertEqual(live["received"], 2)
         self.assertEqual(review["needs_review"], 3)
-        self.assertIsNone(confidence)
+        self.assertEqual(confidence, [Confidence("W-2", "[0.8, 1]", 2)])
         self.assertEqual(accuracy, [])
         statements = [call[3]["json"] for call in self.workspace.calls]
         self.assertTrue(all("ledgerlens_demo.gold." in body["statement"] for body in statements))
         self.assertTrue(all(call[2] == "reader" for call in self.workspace.calls))
-        for body in statements[2:]:
+        self.assertEqual(sum("latest_publication" in body["statement"] for body in statements), 1)
+        self.assertIn("current_document_state", statements[1]["statement"])
+        for body, view in zip(statements[2:], ("review_summary", "confidence_summary", "extraction_accuracy"), strict=True):
+            self.assertIn(f".gold.published_{view}", body["statement"])
             self.assertEqual(body["parameters"], [{"name": "run_id", "value": "publication-1", "type": "STRING"}])
 
     def test_coverage_reads_gold_for_one_publication_and_keeps_missing_only_taxpayers(self):
@@ -59,7 +69,7 @@ class LiveAdapterTests(unittest.TestCase):
         expected, = reader.expected_documents("publication-1")
         self.assertEqual((total.tax_year, total.wages, total.other_income), (2025, "0.00", None))
         self.assertEqual((expected.person_key, expected.status), ("person-2", "missing"))
-        for call, view in zip(self.workspace.calls, ("current_person_year", "current_missing_documents"), strict=True):
+        for call, view in zip(self.workspace.calls, ("published_person_year", "published_missing_documents"), strict=True):
             payload = call[3]["json"]
             self.assertIn(f"ledgerlens_demo.gold.{view} WHERE run_id = :run_id", payload["statement"])
             self.assertEqual(payload["parameters"], [{"name": "run_id", "value": "publication-1", "type": "STRING"}])
@@ -116,7 +126,7 @@ class LiveAdapterTests(unittest.TestCase):
         self.assertEqual(body["parameters"], [{"name": "job_run_id", "value": "87", "type": "STRING"}])
         self.assertTrue(all(call[2] == "operator" for call in self.workspace.calls))
 
-    def test_workbench_appends_parameterized_decision_and_serves_verified_preview(self):
+    def test_workbench_appends_parameterized_decision(self):
         self.workspace.responses = [
             result([["doc", "extract", self.timestamp.isoformat(), "needs_review",
                      "field", "wages", "25000.00", "25000.00", "0.46"]]),
@@ -132,11 +142,29 @@ class LiveAdapterTests(unittest.TestCase):
         self.assertNotIn("25001.00", body["statement"])
         self.assertNotIn("25001.00", str(self.workspace.trace))
         self.assertEqual({item["name"]: item["value"] for item in body["parameters"]}["corrected_value"], "25001.00")
-        original, manifest = bootstrap_fixture()
-        preview = operator.preview(manifest["sha256"])
-        self.assertTrue(preview.startswith(b"%PDF-"))
-        self.assertIn(b"Employee SSN: [masked]", preview)
-        for field in manifest["fields"][:2]:
-            self.assertIn(field["expected_value"].encode(), original)
-            self.assertNotIn(field["expected_value"].encode(), preview)
-        self.assertIsNone(operator.preview("unknown"))
+
+    def test_workbench_reads_only_contract_masked_pages_for_the_current_extraction(self):
+        operator = LiveWorkbench(self.operator_sql, "dev", "verified-user")
+        document = ReviewDocument("a" * 64, "current-extraction", self.timestamp, "needs_review")
+        self.workspace.responses = [
+            {"contents": [{"name": "0.pdf", "is_directory": False},
+                          {"name": "1.pdf", "is_directory": True},
+                          {"name": "original.pdf", "is_directory": False}],
+             "next_page_token": "second"},
+            {"contents": [{"name": "2.pdf", "is_directory": False}]},
+            b"%PDF-masked",
+            None,
+        ]
+        self.assertEqual(operator.preview_pages(document), [0, 2])
+        self.assertEqual(operator.preview(document, 0), b"%PDF-masked")
+        self.assertIsNone(operator.preview(document, 1))
+        directory = f"/Volumes/ledgerlens_dev/review/masked_previews/{document.doc_id}/current-extraction"
+        self.assertEqual(self.workspace.calls, [
+            ("LIST", directory, "operator", {"params": {"page_size": 1000}}),
+            ("LIST", directory, "operator", {"params": {"page_size": 1000, "page_token": "second"}}),
+            ("PDF", f"{directory}/0.pdf", "operator", {}),
+            ("PDF", f"{directory}/1.pdf", "operator", {}),
+        ])
+        for invalid in (replace(document, extraction_id=None), replace(document, extraction_id="../bronze")):
+            self.assertEqual(operator.preview_pages(invalid), [])
+            self.assertIsNone(operator.preview(invalid, 0))

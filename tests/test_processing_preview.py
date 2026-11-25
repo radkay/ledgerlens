@@ -1,80 +1,52 @@
-"""Preview redaction tests using synthetic PDFs rendered by PDFium."""
+"""Processing tests for fail-closed reviewer volume artifacts."""
 
 from contextlib import closing
+from dataclasses import asdict
+from hashlib import sha256
 from io import BytesIO
+import json
 from pathlib import Path
 import re
 import sys
+from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import Mock, patch
 
 import pdfplumber
 from pypdf import PdfReader, PdfWriter
 from pypdfium2 import PdfDocument
-from reportlab.pdfgen.canvas import Canvas
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ledgerlens.processing.preview import IdentifierBox, masked_preview
-from provisioning.fixtures import identifier_preview_fixtures
+from ledgerlens.processing.job import publish
+from ledgerlens.processing.preview import IdentifierBox, PreviewVolume, masked_pages
+from provisioning.fixtures import bootstrap_fixture, identifier_preview_fixtures
+from tests.test_processing import START, MemoryInbox, MemoryStore
 
 
-def sample_pdf():
-    stream = BytesIO()
-    canvas = Canvas(stream, pagesize=(200, 100), invariant=1)
-    canvas.setTitle("Original synthetic document")
-    for serial in (1, 2):
-        canvas.setFillColorRGB(1, 0, 0)
-        canvas.rect(30, 55, 100, 20, stroke=0, fill=1)
-        canvas.setFillColorRGB(1, 1, 1)
-        canvas.drawString(35, 61, f"000-12-{serial:04d}")
-        canvas.setFillColorRGB(0, 0, 1)
-        canvas.rect(30, 15, 100, 20, stroke=0, fill=1)
-        canvas.showPage()
-    canvas.save()
-    return stream.getvalue()
+def record(page_index, boxes=(), *, complete=True):
+    return {"page_index": page_index, "complete": complete, "boxes": [asdict(box) for box in boxes]}
+
+
+def fixture_boxes(pdf):
+    with pdfplumber.open(BytesIO(pdf)) as document:
+        return [
+            IdentifierBox(
+                index, word["x0"] / page.width, word["top"] / page.height,
+                word["x1"] / page.width, word["bottom"] / page.height,
+            )
+            for index, page in enumerate(document.pages)
+            for word in page.extract_words()
+            if re.fullmatch(r"000-[0-9]{2}-[0-9]{4}|00-[0-9]{7}", word["text"])
+        ]
 
 
 class MaskedPreviewTests(unittest.TestCase):
-    def test_rebuilds_raster_pages_and_removes_identifier_pixels_and_text(self):
-        boxes = [IdentifierBox(page, 0.15, 0.25, 0.65, 0.45) for page in range(2)]
-        original = sample_pdf()
-        preview = masked_preview(original, boxes)
-        self.assertIsNotNone(preview)
-        self.assertEqual(masked_preview(original, boxes), preview)
-
-        reader = PdfReader(BytesIO(preview))
-        self.assertEqual(len(reader.pages), 2)
-        self.assertNotEqual(reader.metadata.title, "Original synthetic document")
-        document = PdfDocument(preview)
-        try:
-            for index, page in enumerate(document):
-                try:
-                    bitmap = page.render(scale=1)
-                    try:
-                        image = bitmap.to_pil().convert("RGB")
-                        self.assertEqual(set(image.crop((30, 25, 130, 45)).get_flattened_data()), {(0, 0, 0)})
-                        self.assertEqual(image.getpixel((60, 70)), (0, 0, 255))
-                        self.assertEqual(reader.pages[index].extract_text(), "")
-                    finally:
-                        bitmap.close()
-                finally:
-                    page.close()
-        finally:
-            document.close()
-
     def test_redacts_supplemental_identifiers_and_strips_attachments_and_metadata(self):
         (digital, _), (scanned, _) = identifier_preview_fixtures()
-        with pdfplumber.open(BytesIO(digital)) as template:
-            boxes = [
-                IdentifierBox(
-                    index, word["x0"] / page.width, word["top"] / page.height,
-                    word["x1"] / page.width, word["bottom"] / page.height,
-                )
-                for index, page in enumerate(template.pages)
-                for word in page.extract_words()
-                if re.fullmatch(r"000-\d{2}-\d{4}|00-\d{7}", word["text"])
-            ]
+        boxes = fixture_boxes(digital)
         self.assertEqual([box.page_index for box in boxes], [0, 0, 1, 1])
+        coverage = [record(0, boxes[:2]), record(1, boxes[2:])]
 
         writer = PdfWriter(clone_from=BytesIO(digital))
         writer.add_metadata({"/Title": "000-12-8102"})
@@ -83,17 +55,20 @@ class MaskedPreviewTests(unittest.TestCase):
         writer.write(embedded)
         for variant, original in (("digital", embedded.getvalue()), ("scanned", scanned)):
             with self.subTest(variant=variant):
-                self.assertIsNone(masked_preview(original, [*boxes[:3], None]))
-                preview = masked_preview(original, boxes)
-                self.assertIsNotNone(preview)
-                reader = PdfReader(BytesIO(preview))
-                self.assertEqual(len(reader.attachments), 0)
-                self.assertNotEqual(reader.metadata.title, "000-12-8102")
+                partial = [coverage[0], record(1, boxes[2:3], complete=False)]
+                self.assertEqual(set(dict(masked_pages(original, partial))), {0})
+                pages = dict(masked_pages(original, coverage))
+                self.assertEqual(set(pages), {0, 1})
+                self.assertEqual(dict(masked_pages(original, coverage)), pages)
+                for index, artifact in pages.items():
+                    reader = PdfReader(BytesIO(artifact))
+                    self.assertEqual(len(reader.pages), 1)
+                    self.assertEqual(len(reader.attachments), 0)
+                    self.assertNotEqual(reader.metadata.title, "000-12-8102")
+                    self.assertEqual(reader.pages[0].extract_text(), "")
 
-                with PdfDocument(preview) as document:
-                    for index in range(len(document)):
-                        self.assertEqual(reader.pages[index].extract_text(), "")
-                        with closing(document[index]) as page, closing(page.render(scale=1)) as bitmap:
+                    with PdfDocument(artifact) as document, closing(document[0]) as page:
+                        with closing(page.render(scale=1)) as bitmap:
                             image = bitmap.to_pil().convert("RGB")
                             for box in (box for box in boxes if box.page_index == index):
                                 region = image.crop((
@@ -102,14 +77,76 @@ class MaskedPreviewTests(unittest.TestCase):
                                 ))
                                 self.assertEqual(region.getextrema(), ((0, 0), (0, 0), (0, 0)))
 
-    def test_returns_no_artifact_if_any_box_missing_or_invalid(self):
-        valid = IdentifierBox(0, 0.15, 0.25, 0.65, 0.45)
-        for boxes in (
-            [], [valid, None], [valid, IdentifierBox(2, 0.15, 0.25, 0.65, 0.45)],
-            [IdentifierBox(0, -0.15, 0.25, 0.65, 0.45)],
-            [IdentifierBox(0, 0.15, 0.25, float("nan"), 0.45)],
-            [IdentifierBox(1, 0.15, 0.45, 0.65, 0.45)],
+    def test_withholds_malformed_duplicate_and_unlocated_coverage(self):
+        (pdf, _), _ = identifier_preview_fixtures()
+        box = IdentifierBox(0, 0.1, 0.1, 0.3, 0.2)
+        good = record(0, [box])
+        for coverage, expected in (
+            (None, set()),
+            ([], set()),
+            ([good, record(1, [box])], {0}),
+            ([good, record(1, [IdentifierBox(1, -0.1, 0.1, 0.3, 0.2)])], {0}),
+            ([good, record(1, [IdentifierBox(1, 0.1, 0.1, float("nan"), 0.2)])], {0}),
+            ([good, record(1, [IdentifierBox(1, 0.1, 0.1, 0.3, float("inf"))])], {0}),
+            ([good, good, record(1)], {1}),
+            ([good, {"complete": False}], set()),
+            ([good, record(2)], set()),
         ):
-            with self.subTest(boxes=boxes):
-                self.assertIsNone(masked_preview(sample_pdf(), boxes))
-        self.assertIsNone(masked_preview(b"invalid PDF", [valid]))
+            with self.subTest(coverage=coverage):
+                self.assertEqual(set(dict(masked_pages(pdf, coverage))), expected)
+        self.assertEqual(list(masked_pages(b"invalid PDF", [good])), [])
+        with patch("ledgerlens.processing.preview.render_page",
+                   side_effect=[ValueError("invalid render"), b"verified second page"]):
+            self.assertEqual(dict(masked_pages(pdf, [good, record(1)])),
+                             {1: b"verified second page"})
+
+    def test_volume_writes_only_verified_pages_and_reuses_artifacts(self):
+        (pdf, _), _ = identifier_preview_fixtures()
+        boxes = fixture_boxes(pdf)[:2]
+        doc_id = sha256(pdf).hexdigest()
+        extraction_id = "synthetic-attempt"
+        payload = {"identifier_coverage": [record(0, boxes), record(1, complete=False)]}
+        attempt = {"status": "needs_review", "doc_id": doc_id,
+                   "extraction_id": extraction_id, "raw_json": json.dumps(payload)}
+        inbox = Mock()
+        inbox.read.return_value = ("restricted", pdf)
+        volume = PreviewVolume("ledgerlens_dev")
+        self.assertEqual(volume.root, Path("/Volumes/ledgerlens_dev/review/masked_previews"))
+        self.assertEqual(PreviewVolume("ledgerlens_demo").root,
+                         Path("/Volumes/ledgerlens_demo/review/masked_previews"))
+
+        with TemporaryDirectory() as directory:
+            volume.root = Path(directory)
+            volume.write_attempt(inbox, attempt | {"raw_json": "{}"})
+            inbox.read.assert_not_called()
+            volume.write_attempt(inbox, attempt)
+            path = volume.root / doc_id / extraction_id / "0.pdf"
+            stamp = path.stat().st_mtime_ns
+            with patch("ledgerlens.processing.preview.render_page") as render:
+                volume.write_attempt(inbox, attempt)
+                render.assert_not_called()
+            self.assertEqual(path.stat().st_mtime_ns, stamp)
+            self.assertEqual(list(volume.root.rglob("*.*")), [path])
+
+    def test_processing_job_passes_current_attempt_to_preview_volume(self):
+        from ledgerlens.extraction import extract_digital_pdf
+        from pypdf import __version__
+
+        pdf, fixture = bootstrap_fixture()
+        inbox, store = MemoryInbox(), MemoryStore()
+        inbox.pdfs = {fixture["sha256"]: pdf}
+
+        def extract(*args):
+            attempt = extract_digital_pdf(*args)
+            payload = json.loads(attempt["raw_json"])
+            payload["identifier_coverage"] = [record(0, fixture_boxes(pdf))]
+            return attempt | {"raw_json": json.dumps(payload)}
+
+        with TemporaryDirectory() as directory:
+            volume = PreviewVolume("ledgerlens_dev")
+            volume.root = Path(directory)
+            publish(store, inbox, extract, extractor_version=__version__, job_run_id="preview",
+                    trigger_type="manual", clock=lambda: START, preview_volume=volume)
+            artifact, = volume.root.glob("*/*/0.pdf")
+            self.assertEqual(artifact.parent.parent.name, fixture["sha256"])
+            self.assertEqual(PdfReader(artifact).pages[0].extract_text(), "")

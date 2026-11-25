@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .adapters import ExtractorPlan
 from .replay import canonical_decisions, classify, fingerprint, replay
-from .snapshot import GRAINS, build_snapshot, metadata, silver_projection
+from .snapshot import GRAINS, MetadataError, build_snapshot, metadata, silver_projection
 from .storage import MAX_ROWS, DeltaStore, ensure_rows, unique
 
 DOCUMENTS = "bronze.documents"
@@ -110,9 +110,15 @@ def load_documents(store, inbox, extract, frozen, data, run_id, queued_at, allow
         if attempt is None:
             attempt = extract(contents, doc_id, run_id) | {"extracted_at": timestamp}
             if attempt["status"] in {"extracted", "needs_review"}:
-                _, _, form = metadata(attempt, inventory)
-                if attempt["status"] == "extracted":
-                    attempt["status"] = classify(attempt, form)
+                try:
+                    _, _, form = metadata(attempt, inventory)
+                except MetadataError:
+                    if attempt["extractor_name"] != "ai_parse_document":
+                        raise
+                    attempt["status"] = "needs_review"
+                else:
+                    if attempt["status"] == "extracted":
+                        attempt["status"] = classify(attempt, form)
             elif attempt["status"] != "failed":
                 raise ValueError("Unexpected adapter extraction status")
         if (attempt["doc_id"] != doc_id or attempt["run_id"] != run_id
@@ -226,14 +232,15 @@ def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigge
     return run_id
 
 
-def run(spark, catalog, job_run_id, trigger):
+def run(spark, catalog, job_run_id, trigger, *, extractor_plan=None):
     from pypdf import __version__
     from ..extraction import extract_digital_pdf
 
     store = DeltaStore(spark, catalog, readable=INPUTS, writable=WRITES)
     try:
-        return publish(store, Inbox(catalog), extract_digital_pdf, extractor_version=__version__,
-                       job_run_id=job_run_id, trigger_type=TRIGGER_TYPES[trigger])
+        return publish(store, Inbox(catalog), extractor_plan or extract_digital_pdf,
+                       extractor_version=__version__, job_run_id=job_run_id,
+                       trigger_type=TRIGGER_TYPES[trigger])
     except Exception as error:
         # Connector exception messages can include input values. Report the error class only.
         error_class = getattr(error, "getErrorClass", lambda: None)() or type(error).__name__

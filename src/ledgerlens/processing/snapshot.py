@@ -21,15 +21,26 @@ DESCRIPTOR = re.compile(r"^Synthetic (W-2|1099|1098) - ([0-9]{4}) - LedgerLens S
 PERSON = re.compile(r"^Fixture person key: ([a-z0-9-]+)$", re.MULTILINE)
 
 
+class MetadataError(ValueError):
+    """The extraction could not be associated with one synthetic inventory entry."""
+
+
 def metadata(attempt, inventory):
-    text = "\n".join(json.loads(attempt["raw_json"])["pages"])
+    payload = json.loads(attempt["raw_json"])
+    if attempt["extractor_name"] == "ai_parse_document":
+        elements = sorted(payload["document"]["elements"], key=lambda element: element["id"])
+        lines = [element["content"] for element in elements
+                 if element["type"] in {"title", "text", "section_header", "page_header"}]
+    else:
+        lines = payload["pages"]
+    text = "\n".join(lines)
     forms, people = DESCRIPTOR.findall(text), PERSON.findall(text)
     if len(forms) != 1 or len(people) != 1:
-        raise ValueError("Synthetic form metadata is missing or ambiguous")
+        raise MetadataError("Synthetic form metadata is missing or ambiguous")
     form, year_text = forms[0]
     person, year = people[0], int(year_text)
     if (person, year, form) not in inventory:
-        raise ValueError("Synthetic form metadata is outside the expected inventory")
+        raise MetadataError("Synthetic form metadata is outside the expected inventory")
     return person, year, form
 
 
@@ -66,7 +77,12 @@ def build_snapshot(run_id, states, inventory):
             if state.status == "released":
                 raise ValueError("Released document lacks a successful extraction")
             continue
-        person, year, form = metadata(attempt, inventory)
+        try:
+            person, year, form = metadata(attempt, inventory)
+        except MetadataError:
+            if attempt["extractor_name"] != "ai_parse_document" or state.status not in {"needs_review", "rejected"}:
+                raise
+            continue
         amount_field = AMOUNT_FIELDS[form]
         document_amounts = []
         for identifier, entry in sorted(fields_for(attempt).items()):

@@ -7,10 +7,11 @@ import json
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ledgerlens.processing.adapters import ExtractorPlan, Stage
+from ledgerlens.processing.adapters import ExtractorPlan, Stage, managed_extractor_plan
 from ledgerlens.processing.job import EXTRACTIONS, INVENTORY, PUBLICATIONS, publish
 from ledgerlens.processing.replay import AMOUNT_FIELDS, FORM_IDENTIFIERS
 from tests.test_processing import MemoryInbox, MemoryStore, PERSON, START
@@ -82,15 +83,20 @@ class ExtractorPlanTests(unittest.TestCase):
             person = other_person if form == "1098" else PERSON
             values = {identifier: "synthetic-identifier" for identifier in FORM_IDENTIFIERS[form]}
             values[amount_field] = "250.00"
+            lines = [f"Synthetic {form} - 2025 - LedgerLens Sample", f"Fixture person key: {person}"]
+            raw = {"pages": ["\n".join(lines)]}
+            if name == "ai_parse_document":
+                raw = {"document": {"elements": [
+                    {"id": index, "type": "text", "content": line}
+                    for index, line in enumerate(lines)
+                ]}}
             return {
                 "doc_id": doc_id, "run_id": run_id, "extractor_name": name,
                 "extractor_version": "test", "status": "failed" if failure else "extracted",
                 "error_code": failure, "extraction_id": f"{name}:{doc_id}:{run_id}",
                 "model_name": "test-model" if name == "ai_parse_document" else None,
                 "model_version": None,
-                "raw_json": json.dumps({"pages": [
-                    f"Synthetic {form} - 2025 - LedgerLens Sample\nFixture person key: {person}",
-                ]}),
+                "raw_json": json.dumps(raw),
                 "fields_json": json.dumps([] if failure else [
                     {"field_name": field, "occurrence": 1, "extracted_value": value,
                      "confidence": 0.71 if name == "ai_parse_document" else None, "bbox": None}
@@ -157,3 +163,58 @@ class ExtractorPlanTests(unittest.TestCase):
         self.assertEqual(len(identifiers), 6)
         self.assertTrue(all(row["extracted_value"] is None and row["final_decimal"] is None
                             for row in identifiers))
+
+    def test_real_raster_pdf_dispatches_to_managed_adapter_and_requires_review(self):
+        from ledgerlens.extraction import extract_digital_pdf
+        from provisioning.fixtures import bootstrap_fixture, scanned_fixtures
+
+        store, inbox = MemoryStore(), MemoryInbox()
+        digital, digital_entry = bootstrap_fixture()
+        raster, raster_entry = scanned_fixtures()[0]
+        inbox.pdfs = {digital_entry["sha256"]: digital, raster_entry["sha256"]: raster}
+        original = extract_digital_pdf(digital, digital_entry["sha256"], "original")
+        lines = json.loads(original["raw_json"])["pages"][0].splitlines()
+
+        spark = Mock()
+        spark.sql.return_value.first.return_value = {"parsed_json": json.dumps({
+            "document": {"elements": [
+                {"id": index, "type": "title" if index == 0 else "text",
+                 "content": line, "confidence": 0.71}
+                for index, line in enumerate(lines)
+            ]},
+        })}
+        plan = managed_extractor_plan(spark)
+        run_id = publish(store, inbox, plan, job_run_id="real-raster", trigger_type="manual",
+                         clock=lambda: START)
+        spark.sql.assert_called_once()
+        self.assertEqual(spark.sql.call_args.kwargs, {"args": {"document": bytearray(raster)}})
+        attempts = {row["doc_id"]: row for row in store.read(EXTRACTIONS)}
+        self.assertEqual(attempts[raster_entry["sha256"]]["status"], "needs_review")
+        self.assertEqual(attempts[digital_entry["sha256"]]["extractor_name"], "pypdf")
+        silver = store.read("silver.fields", run_id=run_id)
+        raster_fields = [row for row in silver if row["doc_id"] == raster_entry["sha256"]]
+        self.assertEqual(len(raster_fields), 3)
+        self.assertTrue(all(row["confidence"] is None for row in raster_fields))
+        row, = store.serving("gold.person_year")
+        self.assertEqual(row["wages"], Decimal("25000.00"))
+
+    def test_unassociated_managed_pdf_stays_in_review_without_gold_values(self):
+        from provisioning.fixtures import scanned_fixtures
+
+        store, inbox = MemoryStore(), MemoryInbox()
+        raster, fixture = scanned_fixtures()[0]
+        inbox.pdfs = {fixture["sha256"]: raster}
+        spark = Mock()
+        spark.sql.return_value.first.return_value = {"parsed_json": json.dumps({
+            "document": {"elements": [
+                {"id": 0, "type": "title", "content": "Synthetic W-2 - 2025"},
+                {"id": 1, "type": "text", "content": "Wages: 25000.00"},
+            ]},
+        })}
+        publish(store, inbox, managed_extractor_plan(spark), job_run_id="no-metadata",
+                trigger_type="manual", clock=lambda: START)
+        attempt, = store.read(EXTRACTIONS)
+        self.assertEqual(attempt["status"], "needs_review")
+        self.assertEqual(store.serving("gold.review_summary")[0]["status"], "needs_review")
+        self.assertEqual(store.serving("gold.person_year"), [])
+        self.assertEqual(store.serving("silver.fields"), [])

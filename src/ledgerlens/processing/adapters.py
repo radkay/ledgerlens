@@ -63,3 +63,14 @@ class ExtractorPlan:
             else:
                 needs_review |= confidence < self.minimum_confidence
         return needs_review
+
+
+def managed_extractor_plan(spark):
+    """Use the merged digital adapter, then managed parsing for raster PDFs."""
+    from pypdf import __version__
+    from ..extraction import AiParseDocumentExtractor, extract_digital_pdf
+
+    return ExtractorPlan((
+        Stage("pypdf", __version__, extract_digital_pdf, frozenset({"no_text_layer"})),
+        Stage("ai_parse_document", "1", AiParseDocumentExtractor(spark), require_confidence=True),
+    ), minimum_confidence=0.8)

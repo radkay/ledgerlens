@@ -96,6 +96,29 @@ def verify_permission_denial(table, status, *, credentials=()):
     raise RuntimeError(f"Expected an explicit permission denial for {table} ({summary})")
 
 
+def record_publication_output(output_path, run_id):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", run_id):
+        raise ValueError("Invalid publication run ID for GitHub Actions output")
+    with open(output_path, "a", encoding="utf-8") as output:
+        output.write(f"publication_run_id={run_id}\n")
+
+
+def verify_accuracy(sql, catalog, snapshot_prefix, run_id, *, raster):
+    checks = [("digital", "expected_count > 0 AND exact_match_count BETWEEN 0 AND expected_count")]
+    if raster:
+        checks.append(("scanned", "expected_count = 3 AND exact_match_count BETWEEN 1 AND expected_count"))
+    for variant, condition in checks:
+        result = sql(f"""
+            SELECT 1 FROM {catalog}.gold.{snapshot_prefix}_extraction_accuracy
+            WHERE run_id = :run_id AND form_type = 'W-2' AND variant = :variant
+              AND {condition}
+            LIMIT 1
+        """, run_id=run_id, variant=variant)
+        if result["status"]["state"] != "SUCCEEDED" or not result.get("result", {}).get("data_array"):
+            raise RuntimeError(f"Expected valid {variant} W-2 accuracy for the processing invocation")
+        print(f"W-2 {variant} accuracy verified for the pinned publication", flush=True)
+
+
 def main():
     host = os.environ["DATABRICKS_HOST"].rstrip("/")
     parsed = urlsplit(host)
@@ -180,29 +203,27 @@ def main():
     if publication["status"]["state"] != "SUCCEEDED" or len(rows) != 1:
         raise RuntimeError("The processing invocation did not produce or reuse the current publication")
     published_run_id = rows[0][0]
+    snapshot_prefix = "published" if os.environ.get("LEDGERLENS_SMOKE_PUBLISHED_VIEWS") == "true" else "current"
     lineage = sql(
-        f"SELECT 1 FROM {catalog}.gold.current_lineage WHERE run_id = :run_id LIMIT 1",
+        f"SELECT 1 FROM {catalog}.gold.{snapshot_prefix}_lineage WHERE run_id = :run_id LIMIT 1",
         run_id=published_run_id,
     )
     if lineage["status"]["state"] != "SUCCEEDED" or not lineage.get("result", {}).get("data_array"):
         raise RuntimeError("Expected published Gold lineage for the processing invocation")
     run_job(evaluation_job_id, "Evaluation")
-    accuracy = sql(f"""
-        SELECT 1 FROM {catalog}.gold.current_extraction_accuracy
-        WHERE run_id = :run_id AND form_type = 'W-2' AND variant = 'digital'
-          AND expected_count > 0 AND exact_match_count BETWEEN 0 AND expected_count
-        LIMIT 1
-    """, run_id=published_run_id)
-    if accuracy["status"]["state"] != "SUCCEEDED" or not accuracy.get("result", {}).get("data_array"):
-        raise RuntimeError("Expected valid digital W-2 accuracy for the processing invocation")
+    raster = catalog == "ledgerlens_dev" and os.environ.get("LEDGERLENS_SMOKE_RASTER_DEV") == "true"
+    verify_accuracy(sql, catalog, snapshot_prefix, published_run_id, raster=raster)
     for table in PROTECTED_TABLES:
         result = sql(f"SELECT 1 FROM {catalog}.{table} LIMIT 1")
         verify_permission_denial(table, result["status"], credentials=(secret, auth, token))
     print("Processing and evaluation jobs, Gold publication, lineage and accuracy, and Silver/eval denials passed")
+    return published_run_id
 
 
 if __name__ == "__main__":
     try:
-        main()
+        publication_run_id = main()
+        if output_path := os.environ.get("GITHUB_OUTPUT"):
+            record_publication_output(output_path, publication_run_id)
     except HTTPError as error:
         raise SystemExit(f"Databricks HTTP request failed with status {error.code}") from None

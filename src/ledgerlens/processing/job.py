@@ -1,4 +1,4 @@
-"""Publish a frozen synthetic digital W-2 snapshot using the final marker."""
+"""Publish a frozen synthetic form snapshot using the final marker."""
 
 import json
 import re
@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 
+from .adapters import ExtractorPlan
 from .replay import canonical_decisions, classify, fingerprint, replay
 from .snapshot import GRAINS, build_snapshot, metadata, silver_projection
 from .storage import MAX_ROWS, DeltaStore, ensure_rows, unique
@@ -41,14 +42,14 @@ class Inbox:
         return str(path), contents
 
 
-def capture(store, inbox, extractor_version):
+def capture(store, inbox, configuration):
     filenames = sorted(set(inbox.files()))
     if len(filenames) > MAX_ROWS or any(not PDF.fullmatch(name) for name in filenames):
         raise ValueError("Unexpected inbox PDF name or count")
     frozen = {
         "versions": {table: store.version(table) for table in INPUTS},
         "documents": [PDF.fullmatch(name)[1] for name in filenames],
-        "configuration": [PROCESSING_REVISION, "pypdf", extractor_version],
+        "configuration": configuration,
     }
     data = read_frozen(store, frozen)
     digest = fingerprint([
@@ -70,7 +71,7 @@ def latest_publication(rows):
     return ordered[-1] if ordered else None
 
 
-def load_documents(store, inbox, extract, frozen, data, run_id, queued_at):
+def load_documents(store, inbox, extract, frozen, data, run_id, queued_at, allowed_adapters):
     documents = unique(data[DOCUMENTS], ("doc_id",))
     unique(data[DOCUMENTS], ("content_sha256",))
     for (doc_id,), row in documents.items():
@@ -92,6 +93,7 @@ def load_documents(store, inbox, extract, frozen, data, run_id, queued_at):
     )
     new_documents = []
     attempts = []
+    saved = unique(store.read(EXTRACTIONS, run_id=run_id), ("doc_id",))
     failed = False
     for doc_id in sorted(set(frozen["documents"]) | states.keys()):
         if doc_id in states and states[doc_id].status != "received":
@@ -104,17 +106,18 @@ def load_documents(store, inbox, extract, frozen, data, run_id, queued_at):
                 "doc_id": doc_id, "content_sha256": doc_id, "file_path": path,
                 "received_at": timestamp, "run_id": run_id, "status": "received",
             })
-        attempt = extract(contents, doc_id, run_id)
+        attempt = saved.get((doc_id,))
+        if attempt is None:
+            attempt = extract(contents, doc_id, run_id) | {"extracted_at": timestamp}
+            if attempt["status"] in {"extracted", "needs_review"}:
+                _, _, form = metadata(attempt, inventory)
+                if attempt["status"] == "extracted":
+                    attempt["status"] = classify(attempt, form)
+            elif attempt["status"] != "failed":
+                raise ValueError("Unexpected adapter extraction status")
         if (attempt["doc_id"] != doc_id or attempt["run_id"] != run_id
-                or [attempt["extractor_name"], attempt["extractor_version"]]
-                != frozen["configuration"][1:]):
+                or (attempt["extractor_name"], attempt["extractor_version"]) not in allowed_adapters):
             raise ValueError("Extractor returned inconsistent identity")
-        attempt["extracted_at"] = timestamp
-        if attempt["status"] == "extracted":
-            metadata(attempt, inventory)
-            attempt["status"] = classify(attempt)
-        elif attempt["status"] != "failed":
-            raise ValueError("Unexpected digital extraction status")
         failed |= attempt["status"] == "failed"
         attempts.append(attempt)
     ensure_rows(store, DOCUMENTS, new_documents, ("doc_id",))
@@ -128,11 +131,17 @@ def load_documents(store, inbox, extract, frozen, data, run_id, queued_at):
     )
 
 
-def publish(store, inbox, extract, *, extractor_version, job_run_id, trigger_type,
+def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigger_type,
             clock=lambda: datetime.now(UTC)):
     """Run under the serialized Processing job, with one durable freeze per logical run."""
     if not job_run_id or trigger_type not in TRIGGER_TYPES.values():
         raise ValueError("Invalid job invocation")
+    if isinstance(extract, ExtractorPlan):
+        configuration = [PROCESSING_REVISION, extract.configuration()]
+        allowed_adapters = {(stage.name, stage.version) for stage in extract.stages}
+    else:
+        configuration = [PROCESSING_REVISION, "pypdf", extractor_version]
+        allowed_adapters = {("pypdf", extractor_version)}
     events = store.read(RUNS)
     current = latest_publication(store.read(PUBLICATIONS))
     queued_by_id = {row["run_id"]: row for row in events if row["status"] == "queued"}
@@ -166,7 +175,7 @@ def publish(store, inbox, extract, *, extractor_version, job_run_id, trigger_typ
             event("failed", "superseded")
             raise ValueError("Frozen run was superseded by another publication")
     else:
-        frozen, data, digest = capture(store, inbox, extractor_version)
+        frozen, data, digest = capture(store, inbox, configuration)
         current = latest_publication(data[PUBLICATIONS])
         if current and current["input_digest"] == digest:
             run_id = current["run_id"]
@@ -186,14 +195,14 @@ def publish(store, inbox, extract, *, extractor_version, job_run_id, trigger_typ
     phase = "frozen_inputs"
     try:
         event("running")
-        if frozen["configuration"] != [PROCESSING_REVISION, "pypdf", extractor_version]:
+        if frozen["configuration"] != configuration:
             raise ValueError("Frozen processor configuration is unavailable")
         data = read_frozen(store, frozen)
         if not frozen["documents"] and not data[DOCUMENTS]:
             raise ValueError("No received synthetic documents")
         phase = "bronze_processing"
         states, inventory, timestamp = load_documents(
-            store, inbox, extract, frozen, data, run_id, queued["event_at"],
+            store, inbox, extract, frozen, data, run_id, queued["event_at"], allowed_adapters,
         )
         phase = "snapshot_validation"
         tables = build_snapshot(run_id, states, inventory)

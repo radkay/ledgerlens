@@ -1,7 +1,15 @@
+import sqlite3
+import sys
 import unittest
-from datetime import UTC, datetime
-
+from contextlib import contextmanager, redirect_stderr
 from dataclasses import replace
+from datetime import UTC, datetime
+from io import StringIO
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+from src.ledgerlens.app.ledgerlens_ui import live
+from src.ledgerlens.app.ledgerlens_ui.databricks import Workspace as DatabricksWorkspace
 from src.ledgerlens.app.ledgerlens_ui.dashboard import Confidence, latest_batch_event, read_overview
 from src.ledgerlens.app.ledgerlens_ui.live import GoldReader, LiveBatch, LiveWorkbench, Sql
 from src.ledgerlens.app.ledgerlens_ui.workbench import Decision, ReviewDocument
@@ -12,6 +20,7 @@ class Workspace:
         self.trace = []
         self.calls = []
         self.responses = []
+        self.last_http_status = 200
 
     def call(self, method, path, token, **kwargs):
         self.calls.append((method, path, token, kwargs))
@@ -34,6 +43,84 @@ class LiveAdapterTests(unittest.TestCase):
         self.reader_sql = Sql(self.workspace, "warehouse", lambda: "reader")
         self.operator_sql = Sql(self.workspace, "warehouse", lambda: "operator")
         self.timestamp = datetime(2025, 11, 23, tzinfo=UTC)
+
+    def test_cold_warehouse_polls_one_statement_and_fetches_chunks(self):
+        self.workspace.responses = [
+            {"statement_id": "statement-1", "status": {"state": "PENDING"}},
+            {"status": {"state": "RUNNING"}},
+            {"status": {"state": "SUCCEEDED"}, "result": {"data_array": [["first"]], "next_chunk_index": 1}},
+            {"data_array": [["second"]]},
+        ]
+        notice = []
+
+        @contextmanager
+        def waiting():
+            notice.append(("show", len(self.workspace.calls)))
+            try:
+                yield
+            finally:
+                notice.append(("clear", len(self.workspace.calls)))
+
+        sql = Sql(self.workspace, "warehouse", lambda: "reader", waiting=waiting)
+        with patch.object(live, "sleep") as delay:
+            self.assertEqual(sql.execute("SELECT :value", value="example"), [["first"], ["second"]])
+        self.assertEqual(notice, [("show", 1), ("clear", 3)])
+        delay.assert_called_once_with(2)
+        post, *gets = self.workspace.calls
+        self.assertEqual(post[3]["json"]["on_wait_timeout"], "CONTINUE")
+        self.assertEqual(post[3]["json"]["wait_timeout"], "10s")
+        self.assertEqual([(method, path, token) for method, path, token, _ in gets], [
+            ("GET", "/api/2.0/sql/statements/statement-1", "reader"),
+            ("GET", "/api/2.0/sql/statements/statement-1", "reader"),
+            ("GET", "/api/2.0/sql/statements/statement-1/result/chunks/1", "reader"),
+        ])
+
+    def test_cold_warehouse_stops_at_deadline(self):
+        self.workspace.responses = [
+            {"statement_id": "statement-1", "status": {"state": "PENDING"}},
+            {"status": {"state": "RUNNING"}},
+        ]
+        stderr = StringIO()
+        with (patch.object(live, "monotonic", side_effect=[0, 119, 119.5, 120]),
+              patch.object(live, "sleep") as delay, redirect_stderr(stderr)):
+            with self.assertRaises(TimeoutError):
+                self.reader_sql.execute("SELECT :value", value="secret-fixture")
+        delay.assert_called_once_with(0.5)
+        self.assertEqual(len(self.workspace.calls), 2)
+        self.assertEqual(self.workspace.calls[1][3]["timeout"], (0.5, 0.5))
+        self.assertEqual(stderr.getvalue(), "Databricks exception=TimeoutError http_status=200\n")
+
+    def test_terminal_failure_clears_notice_and_logs_only_safe_metadata(self):
+        self.workspace.responses = [
+            {"statement_id": "statement-1", "status": {"state": "PENDING"}},
+            {"status": {"state": "FAILED", "error": {"message": "secret-fixture"}}},
+        ]
+        notice = MagicMock()
+        sql = Sql(self.workspace, "warehouse", lambda: "reader", waiting=notice)
+        stderr = StringIO()
+        with redirect_stderr(stderr), self.assertRaisesRegex(OSError, "did not confirm"):
+            sql.execute("SELECT :value", value="secret-fixture")
+        notice.return_value.__enter__.assert_called_once()
+        notice.return_value.__exit__.assert_called_once()
+        self.assertEqual(stderr.getvalue(), "Databricks exception=OSError http_status=200\n")
+        self.assertEqual(len(self.workspace.calls), 2)
+
+    def test_workspace_logs_http_errors_without_request_or_response_content(self):
+        class RequestException(OSError):
+            pass
+
+        session = MagicMock()
+        response = session.__enter__.return_value.request.return_value.__enter__.return_value
+        response.status_code = 503
+        response.text = "secret-response"
+        requests = SimpleNamespace(Session=lambda: session, RequestException=RequestException)
+        workspace = DatabricksWorkspace("https://fixture.example")
+        stderr = StringIO()
+        with patch.dict(sys.modules, {"requests": requests}), redirect_stderr(stderr):
+            with self.assertRaisesRegex(OSError, "did not complete"):
+                workspace.call("GET", "/api/2.0/sql/statements/secret-statement", "secret-token")
+        self.assertEqual(stderr.getvalue(), "Databricks exception=OSError http_status=503\n")
+        self.assertEqual(workspace.trace[-1], ("GET /api/2.0/sql/statements/{statement_id}", None))
 
     def test_public_reads_are_pinned_and_use_only_gold(self):
         self.workspace.responses = [
@@ -64,7 +151,7 @@ class LiveAdapterTests(unittest.TestCase):
             result([["publication-1", "7", self.timestamp.isoformat()]]),
             result([["publication-2", "8", self.timestamp.isoformat()]]),
             result([["person-1", "2025", "25000.00", None, None]]),
-            result([["row-1", "wages", "25000.00", None]]),
+            result([["row-1", "wages", "25000.00", "person-year total", "person-1", "2025"]]),
         ]
         reader = GoldReader(self.reader_sql, "demo")
         pinned = reader.latest_publication()
@@ -97,23 +184,63 @@ class LiveAdapterTests(unittest.TestCase):
 
     def test_reverse_lineage_binds_the_exact_output_field_and_publication(self):
         self.workspace.responses = [
-            result([["row-1", "wages", "25000.00", None],
-                    ["row-2", "status", "missing", "person-2 · 2025 · W-2"]]),
+            result([["row-1", "wages", "25000.00", "person-year total", "person-1", "2025"],
+                    ["row-2", "status", "missing", "expected W-2", "person-2", "2025"],
+                    ["row-3", "wages", "25000.00", "pre-filled W-2", "person-1", "2025"]]),
             result([]),
         ]
         reader = GoldReader(self.reader_sql, "demo")
-        wage, value = reader.lineage_values("publication-1")
-        self.assertEqual(wage.label, "wages · 25000.00 · row-1")
-        self.assertEqual(value.label, "status · missing · person-2 · 2025 · W-2")
+        wage, value, prefill = reader.lineage_values("publication-1")
+        self.assertEqual(wage.label, "wages · 25000.00 · person-year total · person-1 · 2025")
+        self.assertEqual(prefill.label, "wages · 25000.00 · pre-filled W-2 · person-1 · 2025")
+        self.assertEqual(value.label, "status · missing · expected W-2 · person-2 · 2025")
         self.assertEqual(reader.lineage("publication-1", gold_row_id=value.gold_row_id,
                                         output_field=value.output_field), [])
         index_query = self.workspace.calls[0][3]["json"]["statement"]
         self.assertEqual(index_query.count(":run_id"), 5)
         self.assertIn("UNION ALL", index_query)
+        self.assertIn("concat('pre-filled ', f.form_type)", index_query)
+        self.assertIn("coalesce(f.person_key, d.person_key, p.person_key)", index_query)
         request = self.workspace.calls[1][3]["json"]
         self.assertIn("gold_row_id = :gold_row_id AND output_field = :output_field", request["statement"])
         self.assertEqual({item["name"]: item["value"] for item in request["parameters"]},
                          {"run_id": "publication-1", "gold_row_id": "row-2", "output_field": "status"})
+
+    def test_lineage_picker_joins_source_context_within_the_pinned_run(self):
+        db = sqlite3.connect(":memory:")
+        self.addCleanup(db.close)
+        db.create_function("concat", 2, lambda left, right: left + right)
+        db.executescript("""
+            CREATE TABLE published_lineage(run_id, gold_row_id, output_field);
+            CREATE TABLE published_person_year(
+                run_id, gold_row_id, person_key, tax_year, wages, other_income, mortgage_interest
+            );
+            CREATE TABLE published_prefill(
+                run_id, gold_row_id, output_field, output_value, form_type, person_key, tax_year
+            );
+            CREATE TABLE published_missing_documents(run_id, gold_row_id, status, person_key, tax_year, expected_form);
+            INSERT INTO published_lineage VALUES ('pinned', 'total', 'wages'), ('pinned', 'form', 'wages');
+            INSERT INTO published_person_year VALUES
+                ('pinned', 'total', 'fixture-person-001', 2025, '25000.00', NULL, NULL),
+                ('new', 'total', 'fixture-person-001', 2025, '90000.00', NULL, NULL);
+            INSERT INTO published_prefill VALUES
+                ('pinned', 'form', 'wages', '25000.00', 'W-2', 'fixture-person-001', 2025),
+                ('new', 'form', 'wages', '90000.00', 'W-2', 'fixture-person-001', 2025);
+            INSERT INTO published_missing_documents VALUES
+                ('pinned', 'missing', 'missing', 'fixture-person-001', 2025, '1099');
+        """)
+
+        class OfflineSql:
+            def execute(self, statement, **values):
+                query = statement.replace("ledgerlens_demo.gold.", "").replace(" AS STRING)", " AS TEXT)")
+                return db.execute(query, values)
+
+        values = GoldReader(OfflineSql(), "demo").lineage_values("pinned")
+        self.assertEqual([value.label for value in values], [
+            "status · missing · expected 1099 · fixture-person-001 · 2025",
+            "wages · 25000.00 · pre-filled W-2 · fixture-person-001 · 2025",
+            "wages · 25000.00 · person-year total · fixture-person-001 · 2025",
+        ])
 
     def test_prefill_reads_only_the_selected_form_in_the_pinned_publication(self):
         self.workspace.responses = [

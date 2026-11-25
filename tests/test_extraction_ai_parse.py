@@ -81,6 +81,10 @@ class AiParseDocumentTests(unittest.TestCase):
         samples = (
             ("not JSON", "invalid_parse_result"),
             ("null", "invalid_parse_result"),
+            ('{"document": {"elements": []}, "metadata": {"confidence": NaN}}',
+             "invalid_parse_result"),
+            ('{"document": {"elements": []}, "metadata": {"confidence": 1e999}}',
+             "invalid_parse_result"),
             ('{"document": {"elements": null}}', "invalid_parse_result"),
             ('{"error_status": [{"error_message": "Example page failure", "page_id": 0}]}',
              "document_parse_error"),

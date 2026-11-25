@@ -59,6 +59,26 @@ class LiveAdapterTests(unittest.TestCase):
             self.assertIn(f".gold.published_{view}", body["statement"])
             self.assertEqual(body["parameters"], [{"name": "run_id", "value": "publication-1", "type": "STRING"}])
 
+    def test_pinned_output_reads_keep_prior_run_when_another_publication_appears(self):
+        self.workspace.responses = [
+            result([["publication-1", "7", self.timestamp.isoformat()]]),
+            result([["publication-2", "8", self.timestamp.isoformat()]]),
+            result([["person-1", "2025", "25000.00", None, None]]),
+            result([["row-1", "wages", "25000.00", None]]),
+        ]
+        reader = GoldReader(self.reader_sql, "demo")
+        pinned = reader.latest_publication()
+        self.assertEqual(reader.latest_publication().run_id, "publication-2")
+        self.assertEqual(reader.person_years(pinned.run_id)[0].wages, "25000.00")
+        self.assertEqual(reader.lineage_values(pinned.run_id)[0].output_value, "25000.00")
+        for call in self.workspace.calls[2:]:
+            request = call[3]["json"]
+            self.assertIn(".gold.published_", request["statement"])
+            self.assertNotIn(".gold.current_", request["statement"])
+            self.assertEqual(request["parameters"], [
+                {"name": "run_id", "value": "publication-1", "type": "STRING"},
+            ])
+
     def test_coverage_reads_gold_for_one_publication_and_keeps_missing_only_taxpayers(self):
         self.workspace.responses = [
             result([["person-1", "2025", "0.00", None, "250.21"]]),

@@ -102,11 +102,33 @@ def show_outputs(reader):
         st.info("Waiting for the first publication.")
         return
     st.caption(f"Publication {publication.publication_seq} · {publication.run_id}")
-    run_id = publication.run_id
-
-    show_lineage(reader, run_id)
-
+    show_coverage(reader, publication.run_id)
+    show_lineage(reader, publication.run_id)
     show_prefill(reader, publication)
+
+
+def show_coverage(reader, run_id):
+    st.subheader("Document coverage")
+    totals = {(row.person_key, row.tax_year): row for row in reader.person_years(run_id)}
+    inventory = reader.expected_documents(run_id)
+    people = sorted(totals.keys() | {(row.person_key, row.tax_year) for row in inventory})
+    if not people:
+        st.caption("No person-year totals or expected documents have been published.")
+        return
+
+    selected = st.selectbox("Person and tax year", people, format_func=lambda key: f"{key[0]} · {key[1]}")
+    expected = [{"Form": row.expected_form, "Status": row.status.capitalize()}
+                for row in inventory if (row.person_key, row.tax_year) == selected]
+    if expected:
+        st.table(expected)
+    else:
+        st.caption("No expected forms are recorded for this person and year.")
+
+    if selected in totals:
+        row = totals[selected]
+        st.table([{"Wages": row.wages, "Other income": row.other_income, "Mortgage interest": row.mortgage_interest}])
+    else:
+        st.caption("No amounts have been published for this person and year.")
 
 
 def show_prefill(reader, publication):
@@ -141,11 +163,11 @@ def show_lineage(reader, run_id):
     else:
         values = reader.lineage_values(run_id)
         if not values:
-            st.caption("No published Gold values have source field links.")
+            st.caption("No published Gold values are available.")
             return
         value = st.selectbox("Gold value", values, format_func=lambda item: item.label)
         field_links = reader.lineage(run_id, gold_row_id=value.gold_row_id, output_field=value.output_field)
     if field_links:
         st.dataframe([asdict(row) for row in field_links], hide_index=True)
     else:
-        st.caption("No field links for this selection.")
+        st.caption("No source field links were published for this selection.")

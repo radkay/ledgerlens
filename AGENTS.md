@@ -2,7 +2,9 @@
 
 Read CONTRACT.md before editing. Treat it as the sole source of identifiers, state, schema and environment boundaries. Propose contract amendments through a protected PR. List every accepted tool or framework default or explicitly report none.
 
-Use one feature branch and session per worktree. Use radkay-bot for commits, pushes and PRs, target dev, and apply the actual agent label. Keep attribution lines out of commits and PRs. Use squash auto-merge for eligible PRs. Ron alone approves and merges dev into main.
+Use one feature branch and session per worktree. Use radkay-bot for commits, pushes and PRs, target dev, and apply both the actual agent label and the owning lane label when creating the PR. Keep attribution lines out of commits and PRs. Use squash auto-merge for eligible PRs. Ron alone approves and merges dev into main.
+
+Use one lane label per PR. Use `lane:first` for bootstrap, integration and cross-lane changes coordinated by First, `lane:extraction` for fixtures and extraction, `lane:processing` for Processing jobs and evaluation code, `lane:app` for the dashboard and workbench, `lane:governance` for catalog governance, and `lane:mcp` for Runtime agent and MCP evidence.
 
 Keep WSL bot-only for GitHub. Authenticate and perform GitHub operations there as radkay-bot. Ron uses a separate environment for his account and administrator operations.
 

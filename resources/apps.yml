@@ -1,0 +1,11 @@
+targets:
+  demo:
+    resources:
+      apps:
+        ledgerlens:
+          name: ledgerlens-demo-app
+          description: LedgerLens synthetic document review and published outputs
+          source_code_path: ../src/ledgerlens/app
+          permissions:
+            - group_name: ledgerlens-demo-reviewers
+              level: CAN_USE

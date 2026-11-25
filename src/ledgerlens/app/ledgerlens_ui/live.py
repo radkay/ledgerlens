@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from .dashboard import Accuracy, PipelineEvent, Publication, Schedule
 from .fixtures import ASSETS
-from .outputs import Form, GoldValue, Lineage, Prefill
+from .outputs import ExpectedDocument, Form, GoldValue, Lineage, PersonYear, Prefill
 from .workbench import Field, ReviewDocument, validate_decision
 
 CATALOGS = {"dev": "ledgerlens_dev", "demo": "ledgerlens_demo"}
@@ -99,7 +99,10 @@ class GoldReader:
                        WHEN 'wages' THEN CAST(p.wages AS STRING)
                        WHEN 'other_income' THEN CAST(p.other_income AS STRING)
                        WHEN 'mortgage_interest' THEN CAST(p.mortgage_interest AS STRING)
-                   END) AS output_value
+                   END) AS output_value,
+                   CASE WHEN d.gold_row_id IS NOT NULL THEN
+                       concat_ws(' · ', d.person_key, CAST(d.tax_year AS STRING), d.expected_form)
+                   END AS context
             FROM links AS l
             LEFT JOIN {self.gold}.current_prefill AS f
                 ON f.run_id = :run_id AND f.gold_row_id = l.gold_row_id AND f.output_field = l.output_field
@@ -107,7 +110,14 @@ class GoldReader:
                 ON d.run_id = :run_id AND d.gold_row_id = l.gold_row_id AND l.output_field = 'status'
             LEFT JOIN {self.gold}.current_person_year AS p
                 ON p.run_id = :run_id AND p.gold_row_id = l.gold_row_id
-            ORDER BY l.output_field, l.gold_row_id
+            UNION ALL
+            SELECT d.gold_row_id, 'status', d.status,
+                   concat_ws(' · ', d.person_key, CAST(d.tax_year AS STRING), d.expected_form)
+            FROM {self.gold}.current_missing_documents AS d
+            WHERE d.run_id = :run_id AND NOT EXISTS (
+                SELECT 1 FROM links AS l WHERE l.gold_row_id = d.gold_row_id AND l.output_field = 'status'
+            )
+            ORDER BY output_field, gold_row_id
         """, run_id=run_id)
         return [GoldValue(*row) for row in rows]
 
@@ -127,6 +137,24 @@ class GoldReader:
             ORDER BY gold_row_id, output_field, doc_id, field_id
         """, run_id=run_id, **parameters)
         return [Lineage(*row) for row in rows]
+
+    def person_years(self, run_id):
+        rows = self.sql.execute(f"""
+            SELECT person_key, tax_year, wages, other_income, mortgage_interest
+            FROM {self.gold}.current_person_year WHERE run_id = :run_id
+            ORDER BY person_key, tax_year DESC
+        """, run_id=run_id)
+        return [PersonYear(person, int(year), wages, income, interest)
+                for person, year, wages, income, interest in rows]
+
+    def expected_documents(self, run_id):
+        rows = self.sql.execute(f"""
+            SELECT person_key, tax_year, expected_form, status
+            FROM {self.gold}.current_missing_documents WHERE run_id = :run_id
+            ORDER BY person_key, tax_year DESC, expected_form
+        """, run_id=run_id)
+        return [ExpectedDocument(person, int(year), form, status)
+                for person, year, form, status in rows]
 
     def prefill_forms(self, run_id):
         rows = self.sql.execute(f"""

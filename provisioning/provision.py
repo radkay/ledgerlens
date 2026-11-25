@@ -7,19 +7,23 @@ import re
 import subprocess
 import tempfile
 import time
+from urllib.parse import urlencode
 
-from fixtures import bootstrap_fixture
+if __package__:
+    from .fixtures import bootstrap_fixture
+else:
+    from fixtures import bootstrap_fixture
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVING = (
     "gold.latest_publication", "gold.current_person_year", "gold.current_missing_documents",
     "gold.current_prefill", "gold.current_lineage", "gold.current_review_summary",
-    "gold.current_extraction_accuracy", "gold.current_document_state",
+    "gold.current_confidence_summary", "gold.current_extraction_accuracy", "gold.current_document_state",
 )
 SNAPSHOTS = (
     "silver.fields", "gold.person_year", "gold.missing_documents", "gold.prefill",
-    "gold.lineage", "gold.review_summary", "gold.extraction_accuracy",
+    "gold.lineage", "gold.review_summary", "gold.confidence_summary", "gold.extraction_accuracy",
 )
 LEDGERS = (
     "bronze.documents", "bronze.extractions", "review.decisions", "ops.pipeline_runs",
@@ -29,45 +33,72 @@ PROCESSOR_OUTPUTS = (
     "bronze.documents", "bronze.extractions", "ops.pipeline_runs", "ops.publications",
     "ops.document_releases", *(table for table in SNAPSHOTS if table != "gold.extraction_accuracy"),
 )
+WORKBENCH_READS = (
+    "gold.current_document_state", "review.current_workbench", "review.reason_codes", "ops.pipeline_runs",
+)
+WORKBENCH_WRITES = ("review.decisions",)
+MASKED_PREVIEWS = "review.masked_previews"
 
 
 def identifier(value):
     return "`" + value.replace("`", "``") + "`"
 
 
+def view_ddl(name, query):
+    # ALTER VIEW keeps grants made to existing views, including the hosted App reader.
+    yield f"CREATE VIEW IF NOT EXISTS {name} AS\n{query}"
+    yield f"ALTER VIEW {name} AS\n{query}"
+
+
 def ddl(catalog):
     for filename in ("schema.sql", "state.sql"):
         sql = ROOT.joinpath("provisioning", filename).read_text()
         for statement in sql.format(catalog=catalog).split(";"):
-            if statement.strip():
-                yield statement.strip()
+            statement = statement.strip()
+            if statement.startswith("CREATE OR REPLACE VIEW "):
+                name, query = statement.removeprefix("CREATE OR REPLACE VIEW ").split(" AS\n", 1)
+                yield from view_ddl(name, query)
+            elif statement:
+                yield statement
 
     for table in (*LEDGERS, *SNAPSHOTS):
         yield f"ALTER TABLE {catalog}.{table} SET TBLPROPERTIES ('delta.appendOnly' = 'true')"
-    yield f"""CREATE OR REPLACE VIEW {catalog}.gold.latest_publication AS
+    yield from view_ddl(f"{catalog}.gold.latest_publication", f"""
 SELECT run_id, publication_seq, published_at FROM {catalog}.ops.publications
-ORDER BY publication_seq DESC LIMIT 1"""
+ORDER BY publication_seq DESC LIMIT 1""".strip())
     for table in SNAPSHOTS:
         if not table.startswith("gold."):
             continue
         name = table.split(".")[1]
-        yield f"""CREATE OR REPLACE VIEW {catalog}.gold.current_{name} AS
+        yield from view_ddl(f"{catalog}.gold.current_{name}", f"""
 SELECT snapshot.* FROM {catalog}.{table} AS snapshot
-JOIN {catalog}.ops.publications AS publication ON snapshot.run_id = publication.run_id"""
+JOIN {catalog}.ops.publications AS publication ON snapshot.run_id = publication.run_id""".strip())
 
 
-def grants(catalog, principal, *, reads=(), writes=(), volumes=()):
+def grants(catalog, principal, *, reads=(), writes=(), volume_reads=(), volume_writes=()):
     subject = identifier(principal)
     yield f"GRANT USE CATALOG ON CATALOG {catalog} TO {subject}"
-    objects = (*reads, *writes, *volumes)
+    objects = (*reads, *writes, *volume_reads, *volume_writes)
     for schema in sorted({name.split(".")[0] for name in objects}):
         yield f"GRANT USE SCHEMA ON SCHEMA {catalog}.{schema} TO {subject}"
     for table in reads:
         yield f"GRANT SELECT ON TABLE {catalog}.{table} TO {subject}"
     for table in writes:
         yield f"GRANT MODIFY ON TABLE {catalog}.{table} TO {subject}"
-    for volume in volumes:
+    for volume in volume_reads:
         yield f"GRANT READ VOLUME ON VOLUME {catalog}.{volume} TO {subject}"
+    for volume in volume_writes:
+        yield f"GRANT WRITE VOLUME ON VOLUME {catalog}.{volume} TO {subject}"
+
+
+def revoke_direct_workbench(catalog, principal):
+    subject = identifier(principal)
+    for table in WORKBENCH_READS:
+        yield f"REVOKE SELECT ON TABLE {catalog}.{table} FROM {subject}"
+    for table in WORKBENCH_WRITES:
+        yield f"REVOKE MODIFY ON TABLE {catalog}.{table} FROM {subject}"
+    for schema in sorted({table.split(".")[0] for table in (*WORKBENCH_READS, *WORKBENCH_WRITES)}):
+        yield f"REVOKE USE SCHEMA ON SCHEMA {catalog}.{schema} FROM {subject}"
 
 
 def dbx(profile, *command, payload=None, response=True):
@@ -125,15 +156,70 @@ def configure_entitlements(profile, principal, *, sql_client):
 def create_reviewer_group(args, ron):
     profile = args.workspace_profile
     name = f"ledgerlens-{args.environment}-reviewers"
-    group = find(profile, "groups", "displayName", name)
+    groups_path = "/api/2.0/account/scim/v2/Groups"
+    query = urlencode({"filter": f"displayName eq {json.dumps(name)}"})
+    matches = dbx(profile, "api", "get", f"{groups_path}?{query}").get("Resources", [])
+    if len(matches) > 1:
+        raise RuntimeError(f"Expected at most one Databricks account group named {name}")
+    group = matches[0] if matches else None
+    workspace_group = find(profile, "groups", "displayName", name)
+    if workspace_group and (group is None or str(workspace_group["id"]) != str(group["id"])):
+        raise RuntimeError(
+            f"Rename the legacy workspace-local group {name} and review its memberships "
+            "and App permissions before assigning them to the replacement account group, then rerun."
+        )
     if group is None:
-        group = dbx(profile, "groups", "create", payload={"displayName": name})
-    group = dbx(profile, "groups", "get", group["id"])
+        group = dbx(profile, "api", "post", groups_path, payload={"displayName": name})
+    group_path = f"{groups_path}/{group['id']}"
+    group = dbx(profile, "api", "get", group_path)
     if str(ron["id"]) not in {str(member["value"]) for member in group.get("members", [])}:
-        dbx(profile, "groups", "patch", group["id"], payload={
+        dbx(profile, "api", "patch", group_path, payload={
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
             "Operations": [{"op": "add", "path": "members", "value": [{"value": str(ron["id"])}]}],
         })
+    assign_reviewer_group(profile, int(group["id"]))
+    return name
+
+
+def assign_reviewer_group(profile, group_id):
+    path = "/api/2.0/identity/workspace-assignments"
+    entitlements = {"WORKSPACE_ACCESS", "DATABRICKS_SQL_ACCESS"}
+    query = ""
+    while True:
+        page = dbx(profile, "api", "get", path + query)
+        if any(str(item["principal_id"]) == str(group_id) for item in page.get("workspace_assignments", [])):
+            assignment = dbx(profile, "api", "get", f"{path}/{group_id}")
+            existing = set(assignment.get("entitlements", []))
+            if entitlements - existing:
+                dbx(profile, "api", "patch", f"{path}/{group_id}?update_mask=entitlements", payload={
+                    "principal_id": group_id, "entitlements": sorted(existing | entitlements),
+                })
+            return
+        if not (token := page.get("next_page_token")):
+            break
+        query = "?" + urlencode({"page_token": token})
+    dbx(profile, "api", "post", path, payload={
+        "principal_id": group_id, "entitlements": sorted(entitlements),
+    })
+
+
+def configure_warehouse(args, apps, reviewers):
+    profile = args.workspace_profile
+    target = ("warehouses", args.warehouse_id)
+    acl = dbx(profile, "permissions", "get", *target).get("access_control_list", [])
+    expected = {
+        ("group_name", reviewers),
+        *(("service_principal_name", apps[role]) for role in ("integration", "reader")),
+    }
+    for entry in acl:
+        if any(grant["permission_level"] in {"CAN_USE", "CAN_MANAGE", "IS_OWNER"}
+               for grant in entry["all_permissions"]):
+            for key in ("user_name", "group_name", "service_principal_name"):
+                if key in entry:
+                    expected.discard((key, entry[key]))
+    updates = [{key: name, "permission_level": "CAN_USE"} for key, name in sorted(expected)]
+    if updates:
+        dbx(profile, "permissions", "update", *target, payload={"access_control_list": updates})
 
 
 def seed_fixture(args, catalog, sql):
@@ -184,9 +270,9 @@ def provision(args):
     warehouse = dbx(args.workspace_profile, "warehouses", "get", args.warehouse_id)
     if warehouse.get("cluster_size") != "2X-Small":
         raise RuntimeError("Specify the existing shared 2X-Small warehouse")
+    reviewers = create_reviewer_group(args, ron)
     for role, principal in principals.items():
         configure_entitlements(args.workspace_profile, principal, sql_client=role in {"integration", "reader"})
-    create_reviewer_group(args, ron)
 
     apps = {role: principal["applicationId"] for role, principal in principals.items()}
 
@@ -200,39 +286,28 @@ def provision(args):
     access = (
         (apps["processor"], {
             "reads": (*PROCESSOR_OUTPUTS, "bronze.expected_forms", "review.decisions", "review.reason_codes"),
-            "writes": PROCESSOR_OUTPUTS, "volumes": ("bronze.inbox",),
+            "writes": PROCESSOR_OUTPUTS, "volume_reads": ("bronze.inbox", MASKED_PREVIEWS),
+            "volume_writes": (MASKED_PREVIEWS,),
         }),
         (apps["evaluator"], {
             "reads": ("eval.answer_key", "bronze.documents", "bronze.extractions", "ops.publications",
                       "gold.extraction_accuracy"),
-            "writes": ("gold.extraction_accuracy",), "volumes": ("eval.fixtures",),
+            "writes": ("gold.extraction_accuracy",), "volume_reads": ("eval.fixtures",),
         }),
         (apps["integration"], {"reads": (*SERVING, "ops.pipeline_runs")}),
         (apps["reader"], {"reads": SERVING}),
-        (args.ron_user, {
-            "reads": ("gold.current_document_state", "review.current_workbench", "review.reason_codes",
-                      "ops.pipeline_runs"),
-            "writes": ("review.decisions",), "volumes": ("bronze.inbox",),
+        (reviewers, {
+            "reads": WORKBENCH_READS, "writes": WORKBENCH_WRITES, "volume_reads": (MASKED_PREVIEWS,),
         }),
+        (args.ron_user, {"volume_reads": ("bronze.inbox",)}),
     )
     for principal, privileges in access:
         for statement in grants(catalog, principal, **privileges):
             sql(statement)
 
-    warehouse_acl = dbx(args.workspace_profile, "permissions", "get", "warehouses", args.warehouse_id)
-    updates = [
-        {"service_principal_name": apps[role], "permission_level": "CAN_USE"}
-        for role in ("integration", "reader")
-    ]
-    if not any(
-        entry.get("user_name") == args.ron_user
-        and any(grant["permission_level"] in {"CAN_USE", "CAN_MANAGE", "IS_OWNER"}
-                for grant in entry["all_permissions"])
-        for entry in warehouse_acl.get("access_control_list", [])
-    ):
-        updates.append({"user_name": args.ron_user, "permission_level": "CAN_USE"})
-    dbx(args.workspace_profile, "permissions", "update", "warehouses", args.warehouse_id,
-        payload={"access_control_list": updates})
+    configure_warehouse(args, apps, reviewers)
+    for statement in revoke_direct_workbench(catalog, args.ron_user):
+        sql(statement)
 
 
 def main():

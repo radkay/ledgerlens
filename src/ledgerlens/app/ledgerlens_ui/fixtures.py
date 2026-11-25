@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .dashboard import Accuracy, PipelineEvent, Publication
 
-from .outputs import GoldValue, Lineage, Prefill
+from .outputs import ExpectedDocument, GoldValue, Lineage, PersonYear, Prefill
 from .workbench import Field, ReviewDocument, validate_decision
 
 PUBLISHED = Publication("fixture-publication-1", 1, datetime(2025, 11, 23, 16, tzinfo=UTC))
@@ -67,7 +67,13 @@ class FixtureReader:
     def lineage_values(self, run_id):
         if run_id != PUBLISHED.run_id:
             return []
-        return [GoldValue(FIXTURE_PREFILL.gold_row_id, FIXTURE_PREFILL.output_field, FIXTURE_PREFILL.output_value)]
+        values = [GoldValue(FIXTURE_PREFILL.gold_row_id, FIXTURE_PREFILL.output_field, FIXTURE_PREFILL.output_value)]
+        for row in self.expected_documents(run_id):
+            if row.status == "missing":
+                context = f"{row.person_key} · {row.tax_year} · {row.expected_form}"
+                row_id = f"fixture-missing-{row.person_key}-{row.tax_year}-{row.expected_form}"
+                values.append(GoldValue(row_id, "status", row.status, context))
+        return values
 
     def lineage(self, run_id, *, doc_id=None, gold_row_id=None, output_field=None):
         if doc_id is not None and gold_row_id is None and output_field is None:
@@ -77,6 +83,22 @@ class FixtureReader:
         else:
             raise ValueError("Select a source document or one Gold output field.")
         return [FIXTURE_LINEAGE] if run_id == PUBLISHED.run_id and matches else []
+
+    def person_years(self, run_id):
+        if run_id != PUBLISHED.run_id:
+            return []
+        entry = FIXTURE_PREFILL
+        return [PersonYear(entry.person_key, entry.tax_year, entry.output_value, None, None)]
+
+    def expected_documents(self, run_id):
+        if run_id != PUBLISHED.run_id:
+            return []
+        entry = FIXTURE_PREFILL
+        return [
+            ExpectedDocument(entry.person_key, entry.tax_year, entry.form_type, "present"),
+            ExpectedDocument(entry.person_key, entry.tax_year, "1099", "missing"),
+            ExpectedDocument("fixture-person-002", entry.tax_year, "W-2", "missing"),
+        ]
 
     def prefill_forms(self, run_id):
         return [FIXTURE_PREFILL.form] if run_id == PUBLISHED.run_id else []

@@ -3,6 +3,7 @@
 import hashlib
 import json
 from io import BytesIO
+from math import isfinite
 
 from .fields import document_form, extract_fields
 from .record import attempt_record
@@ -14,6 +15,13 @@ _PARSE_SQL = """
     )) AS parsed_json
 """
 _TEXT_ELEMENT_TYPES = {"title", "text", "section_header", "page_header"}
+
+
+def _finite_float(text):
+    value = float(text)
+    if not isfinite(value):
+        raise ValueError("Non-finite JSON number")
+    return value
 
 
 class AiParseDocumentExtractor:
@@ -44,7 +52,9 @@ class AiParseDocumentExtractor:
         # propagate to the Processing job for retry.
         row = self._spark.sql(_PARSE_SQL, args={"document": bytearray(document)}).first()
         try:
-            parsed = json.loads(row["parsed_json"])
+            parsed = json.loads(
+                row["parsed_json"], parse_float=_finite_float, parse_constant=_finite_float,
+            )
             if not isinstance(parsed, dict):
                 return record(error_code="invalid_parse_result")
             errors = parsed.get("error_status")

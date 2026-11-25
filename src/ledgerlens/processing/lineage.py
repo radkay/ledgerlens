@@ -34,7 +34,7 @@ def trace_wages(store, run_id, gold_row_id):
     correction_ids = {link["decision_id"] for link in links.values() if link["decision_id"]}
     decisions = {}
     if correction_ids:
-        queued, = [row for row in store.read(RUNS, run_id=run_id) if row["status"] == "queued"]
+        queued, = store.read(RUNS, run_id=run_id, event_status="queued")
         version = json.loads(queued["detail_code"])["versions"][DECISIONS]
         decisions = {
             row["decision_id"]: row for row in canonical_decisions(

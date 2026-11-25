@@ -1,16 +1,23 @@
 """Databricks-backed Gold reads and delegated operator actions."""
 
-from collections import defaultdict
-from dataclasses import asdict
 import re
+from collections import defaultdict
+from contextlib import nullcontext
+from dataclasses import asdict
 from datetime import UTC, datetime
+from time import monotonic, sleep
 
 from .dashboard import Accuracy, Confidence, PipelineEvent, Publication, Schedule
+from .databricks import log_databricks_error
 from .outputs import ExpectedDocument, Form, GoldValue, Lineage, PersonYear, Prefill
 from .workbench import Field, ReviewDocument, validate_decision
 
 CATALOGS = {"dev": "ledgerlens_dev", "demo": "ledgerlens_demo"}
 ROWS_LIMIT = 10_000
+STATEMENT_PATH = "/api/2.0/sql/statements"
+STATEMENT_DEADLINE_SECONDS = 120
+POLL_INTERVAL_SECONDS = 2
+IN_PROGRESS = ("PENDING", "RUNNING")
 
 
 def utc_timestamp(value):
@@ -18,37 +25,71 @@ def utc_timestamp(value):
     return timestamp.astimezone(UTC) if timestamp.tzinfo else timestamp.replace(tzinfo=UTC)
 
 
+def statement_state(response):
+    status = response.get("status")
+    return status.get("state") if isinstance(status, dict) else None
+
+
 class Sql:
-    def __init__(self, workspace, warehouse, token):
+    def __init__(self, workspace, warehouse, token, *, waiting=nullcontext):
         self.workspace = workspace
         self.warehouse = warehouse
         self.token = token
+        self.waiting = waiting
 
     def execute(self, statement, **values):
-        path = "/api/2.0/sql/statements"
         self.workspace.trace.append(("SQL statement", " ".join(statement.split())))
-        response = self.workspace.call("POST", path, self.token(), json={
+        token = self.token()
+        deadline = monotonic() + STATEMENT_DEADLINE_SECONDS
+        response = self.workspace.call("POST", STATEMENT_PATH, token, json={
             "warehouse_id": self.warehouse,
             "statement": statement,
             "parameters": [
                 {"name": name, "value": value, "type": "STRING"} for name, value in values.items()
             ],
             "wait_timeout": "10s",
-            "on_wait_timeout": "CANCEL",
+            "on_wait_timeout": "CONTINUE",
             "disposition": "INLINE",
             "row_limit": ROWS_LIMIT,
         })
-        if response.get("status", {}).get("state") != "SUCCEEDED":
-            raise OSError("Databricks SQL did not confirm the statement.")
+        statement_id = response.get("statement_id")
+        if statement_state(response) in IN_PROGRESS:
+            response = self._poll(self._statement_url(statement_id), token, deadline)
+        if statement_state(response) != "SUCCEEDED":
+            self._fail(OSError("Databricks SQL did not confirm the statement."))
         if response.get("manifest", {}).get("truncated"):
-            raise OSError("The SQL result exceeded the app row limit.")
+            self._fail(OSError("The SQL result exceeded the app row limit."))
         result = response.get("result", {})
         rows = result.get("data_array", [])
         while (next_chunk := result.get("next_chunk_index")) is not None:
-            statement_id = response["statement_id"]
-            result = self.workspace.call("GET", f"{path}/{statement_id}/result/chunks/{next_chunk}", self.token())
+            path = self._statement_url(statement_id)
+            result = self.workspace.call("GET", f"{path}/result/chunks/{next_chunk}", token)
             rows.extend(result.get("data_array", []))
         return rows
+
+    def _poll(self, path, token, deadline):
+        with self.waiting():
+            while (remaining := deadline - monotonic()) > 0:
+                half_budget = remaining / 2
+                response = self.workspace.call(
+                    "GET", path, token, timeout=(min(5, half_budget), min(15, half_budget)),
+                )
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    break
+                if statement_state(response) not in IN_PROGRESS:
+                    return response
+                sleep(min(POLL_INTERVAL_SECONDS, remaining))
+        self._fail(TimeoutError("Databricks SQL exceeded the statement deadline."))
+
+    def _statement_url(self, statement_id):
+        if not isinstance(statement_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", statement_id):
+            self._fail(OSError("Databricks SQL returned an invalid statement ID."))
+        return f"{STATEMENT_PATH}/{statement_id}"
+
+    def _fail(self, error):
+        log_databricks_error(error, self.workspace.last_http_status)
+        raise error
 
 
 class GoldReader:

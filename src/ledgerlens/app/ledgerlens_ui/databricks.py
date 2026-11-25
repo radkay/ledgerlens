@@ -1,5 +1,6 @@
 """Databricks request and operator identity boundaries."""
 
+import sys
 from collections import deque
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -8,6 +9,11 @@ REVIEWER_GROUPS = {
     "dev": "ledgerlens-dev-reviewers",
     "demo": "ledgerlens-demo-reviewers",
 }
+
+
+def log_databricks_error(error, status=None):
+    status = status if type(status) is int and 100 <= status <= 599 else "unavailable"
+    print(f"Databricks exception={type(error).__name__} http_status={status}", file=sys.stderr)
 
 
 class Workspace:
@@ -19,10 +25,14 @@ class Workspace:
             raise ValueError("Configure an explicit HTTPS Databricks workspace URL.")
         self.host = host
         self.trace = deque(maxlen=32)
+        self.last_http_status = None
 
     def call(self, method, path, token, **kwargs):
-        endpoint = path.split("/result/chunks/", 1)
-        safe_path = "/api/2.0/sql/statements/{statement_id}/result/chunks/{index}" if len(endpoint) > 1 else path
+        safe_path = path
+        if path.startswith("/api/2.0/sql/statements/"):
+            safe_path = "/api/2.0/sql/statements/{statement_id}"
+            if "/result/chunks/" in path:
+                safe_path += "/result/chunks/{index}"
         self.trace.append((f"{method} {safe_path}", None))
         return self._request(method, path, headers={"Authorization": f"Bearer {token}"}, **kwargs)
 
@@ -42,17 +52,21 @@ class Workspace:
         result = self._request("POST", path, auth=(client_id, client_secret),
                                data={"grant_type": "client_credentials", "scope": "all-apis"})
         if not isinstance(result.get("access_token"), str) or not result["access_token"]:
-            raise OSError("Databricks reader authentication failed.")
+            error = OSError("Databricks reader authentication failed.")
+            log_databricks_error(error, self.last_http_status)
+            raise error
         return result["access_token"]
 
-    def _request(self, method, path, *, missing_ok=False, pdf=False, **kwargs):
+    def _request(self, method, path, *, missing_ok=False, pdf=False, timeout=(5, 15), **kwargs):
         import requests
 
+        self.last_http_status = None
         try:
             with requests.Session() as session:
                 session.trust_env = False
-                with session.request(method, self.host + path, timeout=(5, 15), allow_redirects=False,
+                with session.request(method, self.host + path, timeout=timeout, allow_redirects=False,
                                      stream=pdf, **kwargs) as response:
+                    self.last_http_status = response.status_code
                     if response.status_code == 404 and missing_ok:
                         return None
                     if response.status_code in (401, 403):
@@ -72,8 +86,14 @@ class Workspace:
                     if not isinstance(payload, dict):
                         raise OSError("Databricks returned an invalid response.")
                     return payload
-        except (requests.RequestException, ValueError):
+        except (requests.RequestException, ValueError) as error:
+            error_response = getattr(error, "response", None)
+            status = getattr(error_response, "status_code", None)
+            log_databricks_error(error, status if status is not None else self.last_http_status)
             raise OSError("Databricks did not complete the request.") from None
+        except OSError as error:
+            log_databricks_error(error, self.last_http_status)
+            raise
 
 
 @dataclass(frozen=True)

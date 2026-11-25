@@ -1,7 +1,14 @@
+import sys
 import unittest
-from datetime import UTC, datetime
-
+from contextlib import contextmanager, redirect_stderr
 from dataclasses import replace
+from datetime import UTC, datetime
+from io import StringIO
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+from src.ledgerlens.app.ledgerlens_ui import live
+from src.ledgerlens.app.ledgerlens_ui.databricks import Workspace as DatabricksWorkspace
 from src.ledgerlens.app.ledgerlens_ui.dashboard import Confidence, latest_batch_event, read_overview
 from src.ledgerlens.app.ledgerlens_ui.live import GoldReader, LiveBatch, LiveWorkbench, Sql
 from src.ledgerlens.app.ledgerlens_ui.workbench import Decision, ReviewDocument
@@ -12,6 +19,7 @@ class Workspace:
         self.trace = []
         self.calls = []
         self.responses = []
+        self.last_http_status = 200
 
     def call(self, method, path, token, **kwargs):
         self.calls.append((method, path, token, kwargs))
@@ -34,6 +42,84 @@ class LiveAdapterTests(unittest.TestCase):
         self.reader_sql = Sql(self.workspace, "warehouse", lambda: "reader")
         self.operator_sql = Sql(self.workspace, "warehouse", lambda: "operator")
         self.timestamp = datetime(2025, 11, 23, tzinfo=UTC)
+
+    def test_cold_warehouse_polls_one_statement_and_fetches_chunks(self):
+        self.workspace.responses = [
+            {"statement_id": "statement-1", "status": {"state": "PENDING"}},
+            {"status": {"state": "RUNNING"}},
+            {"status": {"state": "SUCCEEDED"}, "result": {"data_array": [["first"]], "next_chunk_index": 1}},
+            {"data_array": [["second"]]},
+        ]
+        notice = []
+
+        @contextmanager
+        def waiting():
+            notice.append(("show", len(self.workspace.calls)))
+            try:
+                yield
+            finally:
+                notice.append(("clear", len(self.workspace.calls)))
+
+        sql = Sql(self.workspace, "warehouse", lambda: "reader", waiting=waiting)
+        with patch.object(live, "sleep") as delay:
+            self.assertEqual(sql.execute("SELECT :value", value="example"), [["first"], ["second"]])
+        self.assertEqual(notice, [("show", 1), ("clear", 3)])
+        delay.assert_called_once_with(2)
+        post, *gets = self.workspace.calls
+        self.assertEqual(post[3]["json"]["on_wait_timeout"], "CONTINUE")
+        self.assertEqual(post[3]["json"]["wait_timeout"], "10s")
+        self.assertEqual([(method, path, token) for method, path, token, _ in gets], [
+            ("GET", "/api/2.0/sql/statements/statement-1", "reader"),
+            ("GET", "/api/2.0/sql/statements/statement-1", "reader"),
+            ("GET", "/api/2.0/sql/statements/statement-1/result/chunks/1", "reader"),
+        ])
+
+    def test_cold_warehouse_stops_at_deadline(self):
+        self.workspace.responses = [
+            {"statement_id": "statement-1", "status": {"state": "PENDING"}},
+            {"status": {"state": "RUNNING"}},
+        ]
+        stderr = StringIO()
+        with (patch.object(live, "monotonic", side_effect=[0, 119, 119.5, 120]),
+              patch.object(live, "sleep") as delay, redirect_stderr(stderr)):
+            with self.assertRaises(TimeoutError):
+                self.reader_sql.execute("SELECT :value", value="secret-fixture")
+        delay.assert_called_once_with(0.5)
+        self.assertEqual(len(self.workspace.calls), 2)
+        self.assertEqual(self.workspace.calls[1][3]["timeout"], (0.5, 0.5))
+        self.assertEqual(stderr.getvalue(), "Databricks exception=TimeoutError http_status=200\n")
+
+    def test_terminal_failure_clears_notice_and_logs_only_safe_metadata(self):
+        self.workspace.responses = [
+            {"statement_id": "statement-1", "status": {"state": "PENDING"}},
+            {"status": {"state": "FAILED", "error": {"message": "secret-fixture"}}},
+        ]
+        notice = MagicMock()
+        sql = Sql(self.workspace, "warehouse", lambda: "reader", waiting=notice)
+        stderr = StringIO()
+        with redirect_stderr(stderr), self.assertRaisesRegex(OSError, "did not confirm"):
+            sql.execute("SELECT :value", value="secret-fixture")
+        notice.return_value.__enter__.assert_called_once()
+        notice.return_value.__exit__.assert_called_once()
+        self.assertEqual(stderr.getvalue(), "Databricks exception=OSError http_status=200\n")
+        self.assertEqual(len(self.workspace.calls), 2)
+
+    def test_workspace_logs_http_errors_without_request_or_response_content(self):
+        class RequestException(OSError):
+            pass
+
+        session = MagicMock()
+        response = session.__enter__.return_value.request.return_value.__enter__.return_value
+        response.status_code = 503
+        response.text = "secret-response"
+        requests = SimpleNamespace(Session=lambda: session, RequestException=RequestException)
+        workspace = DatabricksWorkspace("https://fixture.example")
+        stderr = StringIO()
+        with patch.dict(sys.modules, {"requests": requests}), redirect_stderr(stderr):
+            with self.assertRaisesRegex(OSError, "did not complete"):
+                workspace.call("GET", "/api/2.0/sql/statements/secret-statement", "secret-token")
+        self.assertEqual(stderr.getvalue(), "Databricks exception=OSError http_status=503\n")
+        self.assertEqual(workspace.trace[-1], ("GET /api/2.0/sql/statements/{statement_id}", None))
 
     def test_public_reads_are_pinned_and_use_only_gold(self):
         self.workspace.responses = [

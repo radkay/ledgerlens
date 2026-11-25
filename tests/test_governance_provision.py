@@ -1,8 +1,11 @@
+import json
 import unittest
 from argparse import Namespace
-from unittest.mock import call, patch
+from pathlib import Path
+from unittest.mock import Mock, call, patch
 
 from provisioning import provision
+from provisioning.fixtures import bootstrap_fixture, demo_fixtures
 
 
 class ProvisioningTests(unittest.TestCase):
@@ -130,6 +133,90 @@ class ProvisioningTests(unittest.TestCase):
             f"ALTER TABLE {catalog}.review.decisions SET TBLPROPERTIES ('delta.appendOnly' = 'true')",
             sql,
         )
+
+    def test_fixture_seed_targets_the_selected_catalog_and_is_repeatable(self):
+        for environment, fixtures, inventory_count in (
+            ("dev", [bootstrap_fixture()], 2), ("demo", demo_fixtures(), 10),
+        ):
+            with self.subTest(environment=environment):
+                catalog = f"ledgerlens_{environment}"
+                args = Namespace(environment=environment, workspace_profile="synthetic")
+                root = f"dbfs:/Volumes/{catalog}"
+                manifest_path = f"{root}/eval/fixtures/manifest.json"
+                uploads = []
+                sql = Mock()
+
+                def upload(profile, command, action, local, remote, overwrite, *, response):
+                    self.assertEqual((profile, command, action, overwrite, response),
+                                     ("synthetic", "fs", "cp", "--overwrite", False))
+                    self.assertEqual(sql.call_count, 2 if len(uploads) <= len(fixtures) else 4)
+                    uploads.append((remote, Path(local).read_bytes()))
+
+                with patch.object(provision, "dbx", side_effect=upload):
+                    provision.seed_fixture(args, catalog, sql)
+                    provision.seed_fixture(args, catalog, sql)
+
+                pdfs = [(f"{root}/bronze/inbox/{entry['filename']}", pdf) for pdf, entry in fixtures]
+                batch_size = len(pdfs) + 1
+                self.assertEqual(len(uploads), 2 * batch_size)
+                self.assertEqual(uploads[:len(pdfs)], pdfs)
+                self.assertEqual(uploads[:batch_size], uploads[batch_size:])
+                destination, manifest = uploads[len(pdfs)]
+                self.assertEqual(destination, manifest_path)
+                entries = [entry for _, entry in fixtures]
+                self.assertEqual(len(entries), 12 if environment == "demo" else 1)
+                self.assertEqual(json.loads(manifest), entries)
+
+                self.assertEqual(sql.call_count, 4)
+                self.assertEqual(sql.call_args_list[:2], sql.call_args_list[2:])
+                fixture_inventory = sorted({
+                    (entry["person_key"], entry["tax_year"], form)
+                    for entry in entries for form in entry["expected_forms"]
+                })
+                self.assertEqual(len(fixture_inventory), inventory_count)
+                answers = [
+                    (entry["fixture_id"], entry["sha256"], item["field_id"], item["field_name"],
+                     item["expected_value"], entry["variant"], entry["form_type"])
+                    for entry in entries for item in entry["fields"]
+                ]
+                self.assertEqual(len(answers), 36 if environment == "demo" else 3)
+                self.assertEqual(len({(row[0], row[2]) for row in answers}), len(answers))
+                self.assert_fixture_merge(
+                    sql.call_args_list[0].args, f"{catalog}.bronze.expected_forms",
+                    (("person_key", "STRING"), ("tax_year", "INT"), ("expected_form", "STRING")),
+                    ("person_key", "tax_year", "expected_form"), fixture_inventory,
+                )
+                self.assert_fixture_merge(
+                    sql.call_args_list[1].args, f"{catalog}.eval.answer_key",
+                    tuple((name, "STRING") for name in (
+                        "fixture_id", "doc_id", "field_id", "field_name", "expected_value", "variant", "form_type"
+                    )),
+                    ("fixture_id", "field_id"), answers,
+                )
+
+    def assert_fixture_merge(self, invocation, table, columns, keys, rows):
+        statement, parameters = invocation
+        self.assertTrue(statement.startswith(f"MERGE INTO {table} AS target\n"))
+        self.assertIn("ON " + " AND ".join(f"target.{key} = source.{key}" for key in keys), statement)
+        self.assertTrue(statement.endswith("WHEN NOT MATCHED THEN INSERT *"))
+        self.assertEqual(parameters, tuple(
+            (f"{name}_{index}", kind, value)
+            for index, row in enumerate(rows)
+            for (name, kind), value in zip(columns, row, strict=True)
+        ))
+        for parameter, _, _ in parameters:
+            self.assertIn(f":{parameter}", statement)
+
+    def test_demo_manifest_is_not_replaced_if_an_inbox_upload_fails(self):
+        args = Namespace(environment="demo", workspace_profile="synthetic")
+        with (
+            patch.object(provision, "dbx", side_effect=[None, RuntimeError("upload interrupted")]) as dbx,
+            self.assertRaisesRegex(RuntimeError, "upload interrupted"),
+        ):
+            provision.seed_fixture(args, "ledgerlens_demo", Mock())
+        self.assertEqual(dbx.call_count, 2)
+        for upload in dbx.call_args_list:
+            self.assertIn("/ledgerlens_demo/bronze/inbox/", upload.args[4])
 
     def test_warehouse_never_replaces_acl_when_ron_has_direct_can_use(self):
         args = Namespace(workspace_profile="synthetic", warehouse_id="dead", ron_user="operator@example.invalid")

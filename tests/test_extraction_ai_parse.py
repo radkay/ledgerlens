@@ -34,8 +34,12 @@ class AiParseDocumentTests(unittest.TestCase):
                 record = extract(pdf, fixture["sha256"], "run-1")
                 self.assertEqual(set(record), set(expected))
                 self.assertEqual(record["status"], "extracted")
-                self.assertEqual(record["fields_json"], expected["fields_json"])
-                self.assertEqual(json.loads(record["raw_json"]), parsed)
+                fields = json.loads(expected["fields_json"])
+                expected_fields = [field | {"bbox": None} for field in fields]
+                self.assertEqual(json.loads(record["fields_json"]), expected_fields)
+                self.assertEqual(json.loads(record["raw_json"]), parsed | {
+                    "identifier_coverage": [{"page_index": 0, "complete": False, "boxes": []}],
+                })
                 self.assertEqual(record["extractor_name"], "ai_parse_document")
                 self.assertIsNone(record["model_name"])
                 self.assertIsNone(record["model_version"])
@@ -96,6 +100,9 @@ class AiParseDocumentTests(unittest.TestCase):
                 self.assertEqual(record["status"], "failed")
                 self.assertEqual(record["error_code"], error)
                 self.assertEqual(json.loads(record["fields_json"]), [])
+                self.assertEqual(json.loads(record["raw_json"])["identifier_coverage"], [
+                    {"page_index": 0, "complete": False, "boxes": []},
+                ])
 
     def test_spark_failure_reaches_the_processing_job(self):
         pdf, fixture = bootstrap_fixture()

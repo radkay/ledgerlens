@@ -71,3 +71,9 @@ Use the named profile instead of a legacy `sandbox_mode` override. In a linked G
 The trusted project loads the forbidden command prefixes from `.codex/rules/default.rules`. The push and merge scripts use fixed arguments and check the active bot identity. Treat prefix rules as local command controls. GitHub rulesets enforce protected refs and merges remotely. [Codex command rules](https://learn.chatgpt.com/docs/agent-configuration/rules)
 
 Use Python 3.12.3 and uv 0.9.18. Regenerate the lock with `uv lock` and validate with `uv sync --locked` followed by `uv run --no-sync python -m unittest discover -s tests`. The workspace runtime probe, bundle deployment and live denial checks require the authenticated radkay-lab admin profile.
+
+## Optional dev MCP evidence
+
+Keep `LEDGERLENS_MCP_SMOKE_READY_DEV` unset in the `ledgerlens-dev` GitHub environment until both MCP probe entry points are on `dev` and a live evidence run is scheduled within the shared Free Edition quota. This variable is evaluated on the optional steps after standard dev integration succeeds. Demo ignores it.
+
+In that GitHub environment set variables `DATABRICKS_READER_CLIENT_ID` for `ledgerlens-dev-reader`, `LEDGERLENS_MODEL_ENDPOINT=databricks-gpt-oss-20b`, and `LEDGERLENS_MANAGED_MCP_URL` to the confirmed managed endpoint. Enter the dev reader's OAuth secret as environment secret `DATABRICKS_READER_CLIENT_SECRET` and grant that reader `CAN QUERY` on the selected model. The managed probe reuses the existing dev CI identity and secret. Set `LEDGERLENS_MCP_SMOKE_READY_DEV=true` for the planned dev integration run and clear it after capturing evidence. Publish bounded outcomes only. [MCP coordination](https://github.com/radkay/ledgerlens/issues/57)

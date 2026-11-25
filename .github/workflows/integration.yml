@@ -73,3 +73,25 @@ jobs:
             }))}')
           databricks workspace update-permissions directories "$directory_id" --target "$BUNDLE_TARGET" --json "$permissions" >/dev/null
           DATABRICKS_JOB_ID="$job_id" uv run --no-sync python scripts/databricks_smoke.py
+
+      - name: Verify custom MCP and Runtime agent on dev
+        if: github.ref == 'refs/heads/dev' && vars.LEDGERLENS_MCP_SMOKE_READY_DEV == 'true'
+        env:
+          PYTHONPATH: src
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_WAREHOUSE_ID: ${{ vars.DATABRICKS_WAREHOUSE_ID }}
+          DATABRICKS_READER_CLIENT_ID: ${{ vars.DATABRICKS_READER_CLIENT_ID }}
+          DATABRICKS_READER_CLIENT_SECRET: ${{ secrets.DATABRICKS_READER_CLIENT_SECRET }}
+          LEDGERLENS_CATALOG: ledgerlens_dev
+          LEDGERLENS_MODEL_ENDPOINT: ${{ vars.LEDGERLENS_MODEL_ENDPOINT }}
+        run: uv run --no-sync python -m ledgerlens.mcp.smoke
+      - name: Verify managed dbsql MCP on dev
+        if: github.ref == 'refs/heads/dev' && vars.LEDGERLENS_MCP_SMOKE_READY_DEV == 'true'
+        env:
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_WAREHOUSE_ID: ${{ vars.DATABRICKS_WAREHOUSE_ID }}
+          DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          LEDGERLENS_CATALOG: ledgerlens_dev
+          LEDGERLENS_MANAGED_MCP_URL: ${{ vars.LEDGERLENS_MANAGED_MCP_URL }}
+        run: uv run --no-sync python docs/evidence/managed_dbsql_mcp.py

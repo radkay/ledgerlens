@@ -16,14 +16,15 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVING = (
-    "gold.latest_publication", "gold.current_person_year", "gold.current_missing_documents",
-    "gold.current_prefill", "gold.current_lineage", "gold.current_review_summary",
-    "gold.current_confidence_summary", "gold.current_extraction_accuracy", "gold.current_document_state",
+GOLD_SNAPSHOTS = (
+    "person_year", "missing_documents", "prefill", "lineage", "review_summary",
+    "confidence_summary", "extraction_accuracy",
 )
-SNAPSHOTS = (
-    "silver.fields", "gold.person_year", "gold.missing_documents", "gold.prefill",
-    "gold.lineage", "gold.review_summary", "gold.confidence_summary", "gold.extraction_accuracy",
+SNAPSHOTS = ("silver.fields", *(f"gold.{name}" for name in GOLD_SNAPSHOTS))
+SERVING = (
+    "gold.latest_publication",
+    *(f"gold.{prefix}_{name}" for name in GOLD_SNAPSHOTS for prefix in ("current", "published")),
+    "gold.current_document_state",
 )
 LEDGERS = (
     "bronze.documents", "bronze.extractions", "review.decisions", "ops.pipeline_runs",
@@ -66,13 +67,11 @@ def ddl(catalog):
     yield from view_ddl(f"{catalog}.gold.latest_publication", f"""
 SELECT run_id, publication_seq, published_at FROM {catalog}.ops.publications
 ORDER BY publication_seq DESC LIMIT 1""".strip())
-    for table in SNAPSHOTS:
-        if not table.startswith("gold."):
-            continue
-        name = table.split(".")[1]
-        yield from view_ddl(f"{catalog}.gold.current_{name}", f"""
-SELECT snapshot.* FROM {catalog}.{table} AS snapshot
-JOIN {catalog}.ops.publications AS publication ON snapshot.run_id = publication.run_id""".strip())
+    for name in GOLD_SNAPSHOTS:
+        for prefix, publication in (("published", "ops.publications"), ("current", "gold.latest_publication")):
+            yield from view_ddl(f"{catalog}.gold.{prefix}_{name}", f'''
+SELECT snapshot.* FROM {catalog}.gold.{name} AS snapshot
+JOIN {catalog}.{publication} AS publication ON snapshot.run_id = publication.run_id'''.strip())
 
 
 def grants(catalog, principal, *, reads=(), writes=(), volume_reads=(), volume_writes=()):

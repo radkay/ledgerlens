@@ -104,20 +104,7 @@ def show_outputs(reader):
     st.caption(f"Publication {publication.publication_seq} · {publication.run_id}")
     run_id = publication.run_id
 
-    st.subheader("Document lineage")
-    direction = st.radio("Trace direction", ["Document → output", "Output → document"], horizontal=True)
-    forward = direction == "Document → output"
-    key = "doc_id" if forward else "gold_row_id"
-    index = reader.lineage_keys(run_id, key)
-    if index:
-        selection = st.selectbox("Source document" if forward else "Gold row", index)
-        field_links = reader.lineage(run_id, **{key: selection})
-        if field_links:
-            st.dataframe([asdict(row) for row in field_links], hide_index=True)
-        else:
-            st.caption("No field links for this selection.")
-    else:
-        st.caption("No document lineage has been published.")
+    show_lineage(reader, run_id)
 
     st.subheader("Pre-filled form")
     rows = reader.prefill(run_id)
@@ -132,3 +119,26 @@ def show_outputs(reader):
                        file_name=f"prefill-{publication.publication_seq}.pdf", mime="application/pdf")
     st.download_button("Download JSON", prefill_document(publication, form),
                        file_name=f"prefill-{publication.publication_seq}.json", mime="application/json")
+
+
+def show_lineage(reader, run_id):
+    st.subheader("Document lineage")
+    direction = st.radio("Trace direction", ["Document → output", "Gold value → document"], horizontal=True)
+    if direction == "Document → output":
+        documents = reader.lineage_documents(run_id)
+        if not documents:
+            st.caption("No source documents have published lineage.")
+            return
+        doc_id = st.selectbox("Source document", documents)
+        field_links = reader.lineage(run_id, doc_id=doc_id)
+    else:
+        values = reader.lineage_values(run_id)
+        if not values:
+            st.caption("No published Gold values have source field links.")
+            return
+        value = st.selectbox("Gold value", values, format_func=lambda item: item.label)
+        field_links = reader.lineage(run_id, gold_row_id=value.gold_row_id, output_field=value.output_field)
+    if field_links:
+        st.dataframe([asdict(row) for row in field_links], hide_index=True)
+    else:
+        st.caption("No field links for this selection.")

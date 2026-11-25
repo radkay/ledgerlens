@@ -4,6 +4,7 @@ import hashlib
 from io import BytesIO
 
 from .fields import document_form, extract_fields
+from .geometry import digital_geometry
 from .record import attempt_record
 
 
@@ -27,15 +28,19 @@ def extract_digital_pdf(document: bytes, doc_id: str, run_id: str) -> dict:
         return record(error_code="invalid_pdf")
 
     text = "\n".join(pages)
-    raw = {"pages": pages}
+    form_type = document_form(text)
+    coverage, boxes = digital_geometry(document, reader, pages, form_type)
+    raw = {"pages": pages, "identifier_coverage": coverage}
     if not text.strip():
         return record(raw=raw, error_code="no_text_layer")
 
-    form_type = document_form(text)
     if form_type is None:
         return record(raw=raw, error_code="unsupported_form")
 
     fields = extract_fields(text, form_type)
     if not fields:
         return record(raw=raw, error_code="no_fields")
+    if len(fields) == len(boxes):
+        for field, box in zip(fields, boxes, strict=True):
+            field["bbox"] = box
     return record(raw=raw, fields=fields)

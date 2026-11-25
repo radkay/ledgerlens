@@ -90,15 +90,15 @@ def supplemental_forms():
     )
 
 
-def form_lines(form, person, items):
+def form_lines(form, person, items, *, tax_year=2025):
     return [
-        f"Synthetic {form} - 2025 - LedgerLens Sample",
+        f"Synthetic {form} - {tax_year} - LedgerLens Sample",
         f"Fixture person key: {person}",
         *(f"{label}: {value}" for label, _, value in items),
     ]
 
 
-def fixture_entry(pdf, fixture_id, form, person, expected_forms, fields, variant="digital"):
+def fixture_entry(pdf, fixture_id, form, person, expected_forms, fields, variant="digital", *, tax_year=2025):
     doc_id = hashlib.sha256(pdf).hexdigest()
     entry = {
         "fixture_id": fixture_id,
@@ -106,7 +106,7 @@ def fixture_entry(pdf, fixture_id, form, person, expected_forms, fields, variant
         "sha256": doc_id,
         "form_type": form,
         "variant": variant,
-        "tax_year": 2025,
+        "tax_year": tax_year,
         "person_key": person,
         "expected_forms": expected_forms,
         "fields": [
@@ -122,7 +122,7 @@ def fixture_entry(pdf, fixture_id, form, person, expected_forms, fields, variant
 
 
 def demo_fixtures():
-    """Return six matched digital forms and one W-2 with a correctable wage."""
+    """Return current and prior-year digital forms and two cases for review."""
     person_2 = "fixture-person-002"
     person_3 = "fixture-person-003"
     inventory = {person_2: ("W-2", "1098"), person_3: ("W-2", "1099")}
@@ -156,7 +156,65 @@ def demo_fixtures():
     fixtures.append(fixture_entry(
         pdf, "demo-1099-person-003-digital", "1099", person_3, list(inventory[person_3]), fields,
     ))
+    return fixtures + _prior_year_fixtures()
+
+
+def _prior_year_fixtures():
+    fixtures = []
+    examples = (
+        ("fixture-person-001", 1, "22800.00", "1099", [
+            ("Recipient SSN", "recipient_ssn", synthetic_identifier("ssn", 1)),
+            ("Payer TIN", "payer_tin", synthetic_identifier("ein", 31)),
+            ("Other income", "other_income", "0.00"),
+        ]),
+        ("fixture-person-002", 2, "69000.00", "1098", [
+            ("Borrower SSN", "borrower_ssn", synthetic_identifier("ssn", 2)),
+            ("Lender TIN", "lender_tin", synthetic_identifier("ein", 32)),
+            ("Mortgage interest", "mortgage_interest", "0.01"),
+        ]),
+    )
+    for person, serial, wages, form, supplement_fields in examples:
+        inventory = ["W-2", form]
+        wage_fields = [
+            ("Employee SSN", "employee_ssn", synthetic_identifier("ssn", serial)),
+            ("Employer EIN", "employer_ein", synthetic_identifier("ein", 20 + serial)),
+            ("Wages", "wages", wages),
+        ]
+        for form_type, fields in (("W-2", wage_fields), (form, supplement_fields)):
+            fixture_id = f"demo-{form_type.lower()}-person-{serial:03d}-2024-digital"
+            pdf = digital_w2(form_lines(form_type, person, fields, tax_year=2024))
+            fixtures.append(fixture_entry(
+                pdf, fixture_id, form_type, person, inventory.copy(),
+                {name: amount for _, name, amount in fields}, tax_year=2024,
+            ))
+
+    person = "fixture-person-002"
+    fields = [
+        ("Borrower SSN", "borrower_ssn", synthetic_identifier("ssn", 2)),
+        ("Lender TIN", "lender_tin", synthetic_identifier("ein", 33)),
+    ]
+    pdf = digital_w2(form_lines("1098", person, fields, tax_year=2024))
+    expected = {name: value for _, name, value in fields} | {"mortgage_interest": "125.00"}
+    fixtures.append(fixture_entry(
+        pdf, "demo-1098-person-002-2024-missing-interest-digital", "1098",
+        person, ["W-2", "1098"], expected, tax_year=2024,
+    ))
     return fixtures
+
+
+def raster_smoke_fixture():
+    """Return one scanned W-2 with its own dev smoke inventory and private answer key."""
+    person = "fixture-person-raster-smoke"
+    items = [
+        ("Employee SSN", "employee_ssn", synthetic_identifier("ssn", 8201)),
+        ("Employer EIN", "employer_ein", synthetic_identifier("ein", 8201)),
+        ("Wages", "wages", "40800.00"),
+    ]
+    pdf = _raster_pdf(digital_w2(form_lines("W-2", person, items)))
+    return fixture_entry(
+        pdf, "smoke-w2-scanned", "W-2", person, ["W-2"],
+        {name: value for _, name, value in items}, variant="scanned",
+    )
 
 
 def scanned_fixtures():

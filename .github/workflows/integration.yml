@@ -59,6 +59,8 @@ jobs:
         run: |
           databricks bundle deploy --target "$BUNDLE_TARGET" --auto-approve
           summary=$(databricks bundle summary --target "$BUNDLE_TARGET" --output json)
+          DATABRICKS_EVALUATION_JOB_ID=$(jq -er '.resources.jobs.evaluate.id | tostring | select(test("^[1-9][0-9]*$"))' <<< "$summary")
+          export DATABRICKS_EVALUATION_JOB_ID
           files=$(jq -er '.workspace.file_path' <<< "$summary")
           job_id=$(jq -er '.resources.jobs.process.id | tostring | select(test("^[1-9][0-9]*$"))' <<< "$summary")
           directory=$(databricks workspace get-status "$files" --target "$BUNDLE_TARGET" --output json)

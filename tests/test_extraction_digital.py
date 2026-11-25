@@ -3,7 +3,7 @@ import json
 import unittest
 from datetime import UTC
 
-from provisioning.fixtures import bootstrap_fixture, digital_w2
+from provisioning.fixtures import bootstrap_fixture, digital_fixtures, digital_w2
 from src.ledgerlens.extraction import extract_digital_pdf, field_id
 
 BOOTSTRAP_SHA256 = "65912382990c61f773d6b2a109533c7e43d657c8dc52c597e40973b071d23dd8"
@@ -62,6 +62,22 @@ class DigitalExtractionTests(unittest.TestCase):
         reprocess = extract_digital_pdf(pdf, doc_id, "run-2")
         self.assertEqual(retry["extraction_id"], record["extraction_id"])
         self.assertNotEqual(reprocess["extraction_id"], record["extraction_id"])
+
+    def test_1099_and_1098_match_the_private_answer_key(self):
+        for pdf, fixture in digital_fixtures()[1:]:
+            with self.subTest(form=fixture["form_type"]):
+                record = extract_digital_pdf(pdf, fixture["sha256"], "run-1")
+                self.assertEqual(record["status"], "extracted")
+                actual = {
+                    field_id(record["doc_id"], field["field_name"], field["occurrence"]):
+                    field["extracted_value"]
+                    for field in json.loads(record["fields_json"])
+                }
+                expected = {
+                    field["field_id"]: field["expected_value"]
+                    for field in fixture["fields"]
+                }
+                self.assertEqual(actual, expected)
 
     def test_occurrences_follow_document_order(self):
         pdf = digital_w2(["Synthetic W-2 - 2025", "Wages: 1.00", "Wages: ", "Wages: 2.00"])

@@ -136,9 +136,10 @@ def publish(store, inbox, extract, *, extractor_version, job_run_id, trigger_typ
     events = store.read(RUNS)
     current = latest_publication(store.read(PUBLICATIONS))
     queued_by_id = {row["run_id"]: row for row in events if row["status"] == "queued"}
-    prior_invocation = next((row for row in reversed(sorted(events, key=lambda row: row["event_at"]))
-                             if row["job_run_id"] == job_run_id and row["run_id"] in queued_by_id
-                             and row["status"] != "skipped_duplicate"), None)
+    invocation_runs = {row["run_id"] for row in events if row["job_run_id"] == job_run_id}
+    if len(invocation_runs) > 1:
+        raise ValueError("Job invocation maps to multiple logical runs")
+    prior_run = next(iter(invocation_runs), None)
 
     def event(status, detail=None):
         sequence = max((row["event_seq"] for row in events if row["run_id"] == run_id), default=0)
@@ -151,16 +152,16 @@ def publish(store, inbox, extract, *, extractor_version, job_run_id, trigger_typ
         events.append(row)
         return row
 
-    if prior_invocation is not None:
-        run_id = prior_invocation["run_id"]
-        queued = queued_by_id[run_id]
-        frozen = json.loads(queued["detail_code"])
-        digest = frozen["input_digest"]
-        if any(row["run_id"] == run_id for row in store.read(PUBLICATIONS)):
+    if prior_run is not None:
+        run_id = prior_run
+        if store.read(PUBLICATIONS, run_id=run_id):
             if not any(row["run_id"] == run_id and row["status"] == "published" for row in events):
                 event("published")
             event("skipped_duplicate")
             return run_id
+        queued = queued_by_id[run_id]
+        frozen = json.loads(queued["detail_code"])
+        digest = frozen["input_digest"]
         if frozen["predecessor"] != (current["run_id"] if current else None):
             event("failed", "superseded")
             raise ValueError("Frozen run was superseded by another publication")

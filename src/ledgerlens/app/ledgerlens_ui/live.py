@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from .dashboard import Accuracy, PipelineEvent, Publication, Schedule
 from .fixtures import ASSETS
-from .outputs import Lineage, Prefill
+from .outputs import Form, GoldValue, Lineage, Prefill
 from .workbench import Field, ReviewDocument, validate_decision
 
 CATALOGS = {"dev": "ledgerlens_dev", "demo": "ledgerlens_demo"}
@@ -83,33 +83,69 @@ class GoldReader:
                                     ORDER BY form_type, variant""", run_id=run_id)
         return [Accuracy(form, variant, int(count), int(matches)) for form, variant, count, matches in rows]
 
-    def lineage_keys(self, run_id, key):
-        if key not in {"doc_id", "gold_row_id"}:
-            raise ValueError("Unknown lineage direction.")
-        rows = self.sql.execute(f"""SELECT DISTINCT {key} FROM {self.gold}.current_lineage
-                                    WHERE run_id = :run_id ORDER BY {key}""", run_id=run_id)
+    def lineage_documents(self, run_id):
+        rows = self.sql.execute(f"""SELECT DISTINCT doc_id FROM {self.gold}.current_lineage
+                                    WHERE run_id = :run_id ORDER BY doc_id""", run_id=run_id)
         return [row[0] for row in rows]
 
-    def lineage(self, run_id, *, doc_id=None, gold_row_id=None):
-        if (doc_id is None) == (gold_row_id is None):
-            raise ValueError("Select exactly one lineage direction.")
-        key, value = ("doc_id", doc_id) if doc_id is not None else ("gold_row_id", gold_row_id)
+    def lineage_values(self, run_id):
+        rows = self.sql.execute(f"""
+            WITH links AS (
+                SELECT DISTINCT gold_row_id, output_field
+                FROM {self.gold}.current_lineage WHERE run_id = :run_id
+            )
+            SELECT l.gold_row_id, l.output_field,
+                   coalesce(f.output_value, d.status, CASE l.output_field
+                       WHEN 'wages' THEN CAST(p.wages AS STRING)
+                       WHEN 'other_income' THEN CAST(p.other_income AS STRING)
+                       WHEN 'mortgage_interest' THEN CAST(p.mortgage_interest AS STRING)
+                   END) AS output_value
+            FROM links AS l
+            LEFT JOIN {self.gold}.current_prefill AS f
+                ON f.run_id = :run_id AND f.gold_row_id = l.gold_row_id AND f.output_field = l.output_field
+            LEFT JOIN {self.gold}.current_missing_documents AS d
+                ON d.run_id = :run_id AND d.gold_row_id = l.gold_row_id AND l.output_field = 'status'
+            LEFT JOIN {self.gold}.current_person_year AS p
+                ON p.run_id = :run_id AND p.gold_row_id = l.gold_row_id
+            ORDER BY l.output_field, l.gold_row_id
+        """, run_id=run_id)
+        return [GoldValue(*row) for row in rows]
+
+    def lineage(self, run_id, *, doc_id=None, gold_row_id=None, output_field=None):
+        if doc_id is not None and gold_row_id is None and output_field is None:
+            where = "doc_id = :doc_id"
+            parameters = {"doc_id": doc_id}
+        elif doc_id is None and gold_row_id is not None and output_field is not None:
+            where = "gold_row_id = :gold_row_id AND output_field = :output_field"
+            parameters = {"gold_row_id": gold_row_id, "output_field": output_field}
+        else:
+            raise ValueError("Select a source document or one Gold output field.")
         rows = self.sql.execute(f"""
             SELECT gold_row_id, output_field, doc_id, field_id, extraction_id, decision_id,
                    extractor_name, extractor_version, model_name, model_version
-            FROM {self.gold}.current_lineage WHERE run_id = :run_id AND {key} = :source
+            FROM {self.gold}.current_lineage WHERE run_id = :run_id AND {where}
             ORDER BY gold_row_id, output_field, doc_id, field_id
-        """, run_id=run_id, source=value)
+        """, run_id=run_id, **parameters)
         return [Lineage(*row) for row in rows]
 
-    def prefill(self, run_id):
+    def prefill_forms(self, run_id):
+        rows = self.sql.execute(f"""
+            SELECT DISTINCT person_key, tax_year, form_type
+            FROM {self.gold}.current_prefill WHERE run_id = :run_id
+            ORDER BY form_type, tax_year DESC, person_key
+        """, run_id=run_id)
+        return [Form(person, int(year), form_type) for person, year, form_type in rows]
+
+    def prefill(self, run_id, form):
         rows = self.sql.execute(f"""
             SELECT gold_row_id, person_key, tax_year, form_type, output_field, output_value
-            FROM {self.gold}.current_prefill WHERE run_id = :run_id
-            ORDER BY person_key, tax_year, form_type, output_field
-        """, run_id=run_id)
-        return [Prefill(row_id, person, int(year), form, field, value)
-                for row_id, person, year, form, field, value in rows]
+            FROM {self.gold}.current_prefill
+            WHERE run_id = :run_id AND person_key = :person_key
+              AND tax_year = CAST(:tax_year AS INT) AND form_type = :form_type
+            ORDER BY output_field
+        """, run_id=run_id, person_key=form.person_key, tax_year=str(form.tax_year), form_type=form.form_type)
+        return [Prefill(row_id, person, int(year), form_type, field, value)
+                for row_id, person, year, form_type, field, value in rows]
 
 
 class LiveWorkbench:

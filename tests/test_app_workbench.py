@@ -73,12 +73,19 @@ class WorkbenchTests(unittest.TestCase):
         lines = reader.lineage(run_id, doc_id=RELEASED.doc_id)
         self.assertEqual(len(lines), 1)
         gold_row_id = lines[0].gold_row_id
-        self.assertEqual(reader.lineage(run_id, gold_row_id=gold_row_id), lines)
-        self.assertEqual(reader.lineage("unpublished", gold_row_id=gold_row_id), [])
+        value = reader.lineage_values(run_id)[0]
+        self.assertEqual(value.output_value, "25000.00")
+        self.assertEqual(reader.lineage(run_id, gold_row_id=gold_row_id, output_field=value.output_field), lines)
+        self.assertEqual(reader.lineage(run_id, gold_row_id=gold_row_id, output_field="other_income"), [])
+        self.assertEqual(reader.lineage("unpublished", gold_row_id=gold_row_id, output_field=value.output_field), [])
         decision = Decision("decision-1", RELEASED.doc_id, RELEASED.extraction_id, None, "recall",
                             "release_correction", None, "operator", RELEASED.state_at + timedelta(seconds=1))
         operator.append_decision(decision, RELEASED.state_at)
         self.assertEqual(operator.document(RELEASED.doc_id).status, "released")
         self.assertEqual(reader.lineage(run_id, doc_id=RELEASED.doc_id), lines)
-        self.assertEqual(json.loads(prefill_document(publication, reader.prefill(run_id)))["fields"],
-                         {"wages": "25000.00"})
+        form = reader.prefill_forms(run_id)[0]
+        self.assertEqual(reader.prefill("unpublished", form), [])
+        self.assertEqual(reader.prefill(run_id, replace(form, tax_year=2024)), [])
+        artifact = json.loads(prefill_document(publication, reader.prefill(run_id, form)))
+        self.assertEqual(artifact["fields"], {"wages": "25000.00"})
+        self.assertEqual(artifact["published_at"], publication.published_at.isoformat())

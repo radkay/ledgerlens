@@ -40,6 +40,14 @@ WORKBENCH_WRITES = ("review.decisions",)
 MASKED_PREVIEWS = "review.masked_previews"
 
 
+def reviewer_group(environment):
+    return f"ledgerlens-{environment}-reviewers"
+
+
+def identifier_reader_group(environment):
+    return f"ledgerlens-{environment}-identifier-readers"
+
+
 def identifier(value):
     return "`" + value.replace("`", "``") + "`"
 
@@ -51,9 +59,12 @@ def view_ddl(name, query):
 
 
 def ddl(catalog):
+    environment = catalog.removeprefix("ledgerlens_")
     for filename in ("schema.sql", "state.sql"):
         sql = ROOT.joinpath("provisioning", filename).read_text()
-        for statement in sql.format(catalog=catalog).split(";"):
+        sql = sql.format(catalog=catalog, reviewers=reviewer_group(environment),
+                         identifier_readers=identifier_reader_group(environment))
+        for statement in sql.split(";"):
             statement = statement.strip()
             if statement.startswith("CREATE OR REPLACE VIEW "):
                 name, query = statement.removeprefix("CREATE OR REPLACE VIEW ").split(" AS\n", 1)
@@ -153,9 +164,7 @@ def configure_entitlements(profile, principal, *, sql_client):
         })
 
 
-def create_reviewer_group(args, ron):
-    profile = args.workspace_profile
-    name = f"ledgerlens-{args.environment}-reviewers"
+def ensure_account_group(profile, name):
     groups_path = "/api/2.0/account/scim/v2/Groups"
     query = urlencode({"filter": f"displayName eq {json.dumps(name)}"})
     matches = dbx(profile, "api", "get", f"{groups_path}?{query}").get("Resources", [])
@@ -170,18 +179,24 @@ def create_reviewer_group(args, ron):
         )
     if group is None:
         group = dbx(profile, "api", "post", groups_path, payload={"displayName": name})
-    group_path = f"{groups_path}/{group['id']}"
+    return f"{groups_path}/{group['id']}", int(group["id"])
+
+
+def create_reviewer_group(args, ron):
+    profile = args.workspace_profile
+    name = reviewer_group(args.environment)
+    group_path, group_id = ensure_account_group(profile, name)
     group = dbx(profile, "api", "get", group_path)
     if str(ron["id"]) not in {str(member["value"]) for member in group.get("members", [])}:
         dbx(profile, "api", "patch", group_path, payload={
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
             "Operations": [{"op": "add", "path": "members", "value": [{"value": str(ron["id"])}]}],
         })
-    assign_reviewer_group(profile, int(group["id"]))
+    assign_sql_group(profile, group_id)
     return name
 
 
-def assign_reviewer_group(profile, group_id):
+def assign_sql_group(profile, group_id):
     path = "/api/2.0/identity/workspace-assignments"
     entitlements = {"WORKSPACE_ACCESS", "DATABRICKS_SQL_ACCESS"}
     query = ""
@@ -203,12 +218,12 @@ def assign_reviewer_group(profile, group_id):
     })
 
 
-def configure_warehouse(args, apps, reviewers):
+def configure_warehouse(args, apps, groups):
     profile = args.workspace_profile
     target = ("warehouses", args.warehouse_id)
     acl = dbx(profile, "permissions", "get", *target).get("access_control_list", [])
     expected = {
-        ("group_name", reviewers),
+        *(("group_name", group) for group in groups),
         *(("service_principal_name", apps[role]) for role in ("integration", "reader")),
     }
     direct = []
@@ -285,6 +300,9 @@ def provision(args):
     if warehouse.get("cluster_size") != "2X-Small":
         raise RuntimeError("Specify the existing shared 2X-Small warehouse")
     reviewers = create_reviewer_group(args, ron)
+    identifier_readers = identifier_reader_group(args.environment)
+    _, identifier_reader_id = ensure_account_group(args.workspace_profile, identifier_readers)
+    assign_sql_group(args.workspace_profile, identifier_reader_id)
     for role, principal in principals.items():
         configure_entitlements(args.workspace_profile, principal, sql_client=role in {"integration", "reader"})
 
@@ -313,13 +331,14 @@ def provision(args):
         (reviewers, {
             "reads": WORKBENCH_READS, "writes": WORKBENCH_WRITES, "volume_reads": (MASKED_PREVIEWS,),
         }),
+        (identifier_readers, {"reads": ("silver.fields",)}),
         (args.ron_user, {"volume_reads": ("bronze.inbox",)}),
     )
     for principal, privileges in access:
         for statement in grants(catalog, principal, **privileges):
             sql(statement)
 
-    configure_warehouse(args, apps, reviewers)
+    configure_warehouse(args, apps, (reviewers, identifier_readers))
     for statement in revoke_direct_workbench(catalog, args.ron_user):
         sql(statement)
 

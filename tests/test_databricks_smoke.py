@@ -62,8 +62,31 @@ class PermissionDenialTests(TestCase):
                 "error_code": "BAD_REQUEST", "sql_state": "42P01", "message": "synthetic private text",
             }}, "state=FAILED, error_code=BAD_REQUEST, sql_state=42P01"),
         ):
-            with self.subTest(status=status), self.assertRaises(RuntimeError) as raised:
+            with self.subTest(status=status), patch("builtins.print"), self.assertRaises(RuntimeError) as raised:
                 verify_permission_denial("eval.answer_key", status)
             self.assertEqual(
                 str(raised.exception), f"Expected an explicit permission denial for eval.answer_key ({detail})",
             )
+
+
+    def test_accepts_hidden_object_conditions_only_for_contract_tables(self):
+        for table, condition in (("silver.fields", "SCHEMA_NOT_FOUND"),
+                                 ("eval.answer_key", "TABLE_OR_VIEW_NOT_FOUND")):
+            status = {"state": "FAILED", "error": {
+                "error_code": "BAD_REQUEST", "message": f"[{condition}] Hidden by Unity Catalog",
+            }}
+            with self.subTest(table=table), patch("builtins.print"):
+                verify_permission_denial(table, status)
+                with self.assertRaises(RuntimeError):
+                    verify_permission_denial("silver.misspelled", status)
+
+    def test_logs_one_bounded_redacted_line_and_rejects_unrelated_bad_request(self):
+        status = {"state": "FAILED", "error": {
+            "error_code": "BAD_REQUEST",
+            "message": "[PARSE_SYNTAX_ERROR] synthetic-secret " + "a" * 300 + "\nsecond line",
+        }}
+        with patch("builtins.print") as log, self.assertRaises(RuntimeError):
+            verify_permission_denial("silver.fields", status, credentials=("synthetic-secret",))
+        prefix = "SQL denial probe for silver.fields: "
+        message = "[PARSE_SYNTAX_ERROR] *** " + "a" * 300
+        log.assert_called_once_with(prefix + message[:240] + "…", flush=True)

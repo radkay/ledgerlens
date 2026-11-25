@@ -49,7 +49,7 @@ Set each readiness variable under **Settings → Secrets and variables → Actio
 
 | Repository variable | Set to `true` when | Eligible runs |
 |---|---|---|
-| `LEDGERLENS_INTEGRATION_READY_DEV` | `ledgerlens_dev` and its dev bundle are ready | Pushes to `dev` that match the integration workflow's path filter |
+| `LEDGERLENS_INTEGRATION_READY_DEV` | `ledgerlens_dev` and its dev bundle are ready | Matching pushes to `dev` and manual dispatch from `dev` |
 | `LEDGERLENS_INTEGRATION_READY_DEMO` | `ledgerlens_demo` and its demo bundle are ready | Matching pushes to `main` and manual dispatch from `main` |
 
 Each new variable takes effect once the workflow change reaches its branch. Keep the legacy `LEDGERLENS_INTEGRATION_READY` unset or false while any protected branch still runs the earlier workflow.

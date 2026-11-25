@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import time
 from urllib.parse import urlencode
+from uuid import UUID
 
 if __package__:
     from .fixtures import bootstrap_fixture
@@ -38,6 +39,7 @@ WORKBENCH_READS = (
 )
 WORKBENCH_WRITES = ("review.decisions",)
 MASKED_PREVIEWS = "review.masked_previews"
+DEMO_APP_NAME = "ledgerlens-demo-app"
 
 
 def identifier(value):
@@ -204,13 +206,15 @@ def assign_reviewer_group(profile, group_id):
 
 
 def configure_warehouse(args, apps, reviewers):
-    profile = args.workspace_profile
-    target = ("warehouses", args.warehouse_id)
-    acl = dbx(profile, "permissions", "get", *target).get("access_control_list", [])
-    expected = {
+    ensure_warehouse_use(args.workspace_profile, args.warehouse_id, {
         ("group_name", reviewers),
         *(("service_principal_name", apps[role]) for role in ("integration", "reader")),
-    }
+    })
+
+
+def ensure_warehouse_use(profile, warehouse_id, expected):
+    target = ("warehouses", warehouse_id)
+    acl = dbx(profile, "permissions", "get", *target).get("access_control_list", [])
     for entry in acl:
         if any(grant["permission_level"] in {"CAN_USE", "CAN_MANAGE", "IS_OWNER"}
                for grant in entry["all_permissions"]):
@@ -254,12 +258,55 @@ ON target.fixture_id = source.fixture_id AND target.field_id = source.field_id
 WHEN NOT MATCHED THEN INSERT *""", [(key, "STRING", values[key]) for key in keys])
 
 
-def provision(args):
-    catalog = "ledgerlens_" + args.environment
-    prefix = "ledgerlens-" + args.environment
+def require_ron(args):
     ron = dbx(args.workspace_profile, "current-user", "me")
     if ron["userName"] != args.ron_user:
         raise RuntimeError("Authenticate the radkay-lab workspace CLI profile as Ron")
+    return ron
+
+
+def require_shared_warehouse(args):
+    warehouse = dbx(args.workspace_profile, "warehouses", "get", args.warehouse_id)
+    if warehouse.get("cluster_size") != "2X-Small":
+        raise RuntimeError("Specify the existing shared 2X-Small warehouse")
+
+
+def resolve_demo_app(profile):
+    name = DEMO_APP_NAME
+    app = dbx(profile, "apps", "get", name) or {}
+    client_id = app.get("service_principal_client_id") or ""
+    if app.get("name") != name or not re.fullmatch(
+        r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", client_id, re.ASCII,
+    ) or not UUID(client_id).int:
+        raise RuntimeError("Resolve the host-managed principal of ledgerlens-demo-app before granting access")
+    return name, client_id
+
+
+def grant_demo_app_reader(args):
+    if args.environment != "demo":
+        raise RuntimeError("The Databricks App reader is scoped to demo")
+    require_ron(args)
+    require_shared_warehouse(args)
+    profile = args.workspace_profile
+    name, client_id = resolve_demo_app(profile)
+    print(json.dumps({"app": name, "service_principal_client_id": client_id}), flush=True)
+    catalog = "ledgerlens_demo"
+    objects = (
+        ("catalog", catalog, "USE_CATALOG"),
+        ("schema", f"{catalog}.gold", "USE_SCHEMA"),
+        *(("table", f"{catalog}.{view}", "SELECT") for view in SERVING),
+    )
+    for kind, full_name, privilege in objects:
+        dbx(profile, "grants", "update", kind, full_name, payload={
+            "changes": [{"principal": client_id, "add": [privilege]}],
+        })
+    ensure_warehouse_use(profile, args.warehouse_id, {("service_principal_name", client_id)})
+
+
+def provision(args):
+    catalog = "ledgerlens_" + args.environment
+    prefix = "ledgerlens-" + args.environment
+    ron = require_ron(args)
     principals = {}
     integration = "ci" if args.environment == "dev" else "evidence"
     for role in ("processor", "evaluator", integration, "reader"):
@@ -267,9 +314,7 @@ def provision(args):
         if principal is None or principal.get("active") is False:
             raise RuntimeError(f"Create and activate the radkay-lab workspace identity {prefix}-{role}")
         principals["integration" if role == integration else role] = principal
-    warehouse = dbx(args.workspace_profile, "warehouses", "get", args.warehouse_id)
-    if warehouse.get("cluster_size") != "2X-Small":
-        raise RuntimeError("Specify the existing shared 2X-Small warehouse")
+    require_shared_warehouse(args)
     reviewers = create_reviewer_group(args, ron)
     for role, principal in principals.items():
         configure_entitlements(args.workspace_profile, principal, sql_client=role in {"integration", "reader"})
@@ -313,7 +358,10 @@ def provision(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("environment", choices=("dev", "demo"))
-    parser.add_argument("--plan", action="store_true", help="Print Unity Catalog DDL without connecting")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--plan", action="store_true", help="Print Unity Catalog DDL without connecting")
+    mode.add_argument("--demo-app-reader", action="store_true",
+                      help="Resolve and grant the hosted demo App reader via ACL APIs")
     for name in ("workspace-profile", "warehouse-id", "ron-user"):
         parser.add_argument(f"--{name}")
     args = parser.parse_args()
@@ -325,8 +373,13 @@ def main():
             parser.error(f"--{name.replace('_', '-')} is required when applying")
     if not re.fullmatch(r"[0-9a-f]+", args.warehouse_id):
         parser.error("Specify the hexadecimal SQL warehouse ID")
+    if args.demo_app_reader and args.environment != "demo":
+        parser.error("--demo-app-reader requires demo")
     try:
-        provision(args)
+        if args.demo_app_reader:
+            grant_demo_app_reader(args)
+        else:
+            provision(args)
     except subprocess.CalledProcessError as error:
         raise SystemExit(f"Databricks command failed: {error.cmd[1:3]}\n{error.stderr or ''}") from None
 

@@ -52,6 +52,7 @@ jobs:
           DATABRICKS_WAREHOUSE_ID: ${{ vars.DATABRICKS_WAREHOUSE_ID }}
           BUNDLE_VAR_processor_application_id: ${{ vars.DATABRICKS_PROCESSOR_APPLICATION_ID }}
           BUNDLE_VAR_evaluator_application_id: ${{ vars.DATABRICKS_EVALUATOR_APPLICATION_ID }}
+          BUNDLE_VAR_processing_schedule_pause_status: ${{ vars.LEDGERLENS_PROCESSING_SCHEDULE_PAUSE_STATUS || 'PAUSED' }}
           BUNDLE_TARGET: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'demo' }}
           LEDGERLENS_CATALOG: ${{ github.ref == 'refs/heads/dev' && 'ledgerlens_dev' || 'ledgerlens_demo' }}
         shell: bash

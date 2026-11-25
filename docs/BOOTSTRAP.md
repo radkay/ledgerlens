@@ -56,6 +56,10 @@ Each new variable takes effect once the workflow change reaches its branch. Keep
 
 Create external reader OAuth credentials only for the Community Cloud demo reader and enter them directly there. Verify GitHub Actions and Streamlit OAuth independently. Verify the processor can read expected forms, the evaluator can read the private answer key, and the reader and integration identity are denied access to sensitive tables. Verify the managed dbsql MCP call before publishing claims.
 
+Both Processing job schedules start paused and run daily at 09:00 UTC when enabled. Set `LEDGERLENS_PROCESSING_SCHEDULE_PAUSE_STATUS` to `UNPAUSED` in the matching GitHub environment when automatic runs are wanted. Set it back to `PAUSED` to persist a pause on redeploy. Use the Databricks Jobs UI for an immediate pause.
+
+Bundle deployment creates the matching Databricks App and syncs the existing Streamlit source. The reviewer group can use that app. Start the app from the workspace after verifying Free Edition capacity. Before enabling live app reads, record the resolved app principal and grant it the matching catalog's Gold reader privileges and `CAN_USE` on the existing SQL warehouse. Operator actions use Ron's delegated identity. [Databricks App bundle deployment](https://docs.databricks.com/aws/en/dev-tools/bundles/apps-tutorial)
+
 ## Codex and local validation
 
 In Codex CLI 0.172.0, trust the project and start a fresh session per feature worktree. The project config selects the `ledgerlens_build` profile. It extends `:workspace`, explicitly makes the workspace's `.git` writable, keeps `.codex`, `.agents` and `.aws` read-only, enables network access for GitHub and package installs, and sets approvals to `never`. Set radkay-bot as the active GitHub CLI account and commit identity. Build agents run `scripts/push-feature` to push the current feature branch and `gh pr create --repo radkay/ledgerlens --base dev --label agent:codex` to open the PR. Use `scripts/merge-feature PR_NUMBER` for eligible squash auto-merge. Ron handles the initial Git setup and the dev-to-main merge.

@@ -1,0 +1,9 @@
+resources:
+  apps:
+    ledgerlens:
+      name: ledgerlens-${bundle.target}-app
+      description: LedgerLens synthetic document review and published outputs
+      source_code_path: ../src/ledgerlens/app
+      permissions:
+        - group_name: ledgerlens-${bundle.target}-reviewers
+          level: CAN_USE

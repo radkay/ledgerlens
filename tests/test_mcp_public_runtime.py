@@ -139,6 +139,8 @@ class PublicRuntimeTests(unittest.TestCase):
         self.connect.assert_not_called()
 
     def test_public_panel_exposes_only_presets_and_shows_tool_and_pin_on_rerun(self):
+        answer = "**Published wages**\n\n| Form | Wages |\n| --- | --- |\n| W-2 | 53000.00 |"
+        self.chat.return_value = answer_text(answer)
         st = MagicMock()
         st.session_state = {}
         settings = {
@@ -151,12 +153,14 @@ class PublicRuntimeTests(unittest.TestCase):
             panel.show_runtime_panel(None, fixture=False, settings=settings, public=True)
             self.assertEqual([c.args[0] for c in st.button.call_args_list], [p.question for p in panel.PRESETS])
             st.text_input.assert_not_called()
+            st.markdown.assert_called_once_with(answer, unsafe_allow_html=False)
+            st.text.assert_not_called()
             st.caption.assert_called_once_with("Publication run published-1")
             st.expander.assert_called_once_with("trace_value · Publication run published-1")
 
             st.button.side_effect = [False] * 4
             panel.show_runtime_panel(None, fixture=False, settings=settings, public=True)
-            self.assertEqual(st.text.call_count, 2)
+            self.assertEqual(st.markdown.call_count, 2)
         self.chat.assert_called_once()
 
     def test_public_panel_renders_unavailable_when_daily_budget_is_used(self):

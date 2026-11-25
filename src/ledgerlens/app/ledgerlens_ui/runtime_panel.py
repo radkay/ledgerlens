@@ -184,7 +184,7 @@ def show_public_runtime(settings):
         st.session_state.pop(state_key, None)
         return
     if reply.answer and reply.answer.grounded:
-        st.text(reply.answer.text)
+        st.markdown(reply.answer.text, unsafe_allow_html=False)
     else:
         st.info(UNAVAILABLE)
     st.caption(f"Publication run {reply.run_id}")

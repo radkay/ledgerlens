@@ -19,6 +19,7 @@ from ledgerlens.processing.job import (
 from ledgerlens.processing.lineage import trace_wages
 from ledgerlens.processing.replay import ACTIONS, field_id
 from ledgerlens.processing.snapshot import build_snapshot, silver_projection
+from ledgerlens.processing.storage import MAX_ROWS
 
 START = datetime(2025, 1, 1, tzinfo=UTC)
 PERSON = "fixture-person-001"
@@ -50,9 +51,16 @@ class MemoryStore:
     def version(self, table):
         return len(self.history[table]) - 1
 
-    def read(self, table, *, version=None, run_id=None):
+    def read(self, table, *, version=None, run_id=None, job_run_id=None, event_status=None,
+             latest_event=False):
         snapshot = self.history[table][-1 if version is None else version]
-        rows = [deepcopy(row) for row in snapshot if run_id is None or row["run_id"] == run_id]
+        rows = [deepcopy(row) for row in snapshot if (run_id is None or row["run_id"] == run_id)
+                and (job_run_id is None or row["job_run_id"] == job_run_id)
+                and (event_status is None or row["status"] == event_status)]
+        if latest_event and rows:
+            rows = [max(rows, key=lambda row: row["event_seq"])]
+        if len(rows) > MAX_ROWS:
+            raise ValueError("Synthetic store row limit")
         return [silver_projection(row) for row in rows] if table == "silver.fields" else rows
 
     def append(self, table, rows):
@@ -228,6 +236,21 @@ class ProcessingTests(unittest.TestCase):
         final = self.store.read(RUNS)[-1]
         self.assertEqual((final["status"], final["trigger_type"], final["job_run_id"]),
                          ("skipped_duplicate", "scheduled", "2"))
+
+    def test_repeated_triggers_do_not_exhaust_the_event_read_budget(self):
+        first = self.run_job("1")
+        last = self.store.read(RUNS, run_id=first, latest_event=True)[0]
+        self.store.append(RUNS, [
+            last | {"job_run_id": f"schedule-{index}", "event_seq": last["event_seq"] + index,
+                    "status": "skipped_duplicate", "trigger_type": "scheduled"}
+            for index in range(1, MAX_ROWS + 1)
+        ])
+        self.assertEqual(self.run_job("2", "scheduled"), first)
+        final, = self.store.read(RUNS, run_id=first, latest_event=True)
+        self.assertEqual(final["event_seq"], last["event_seq"] + MAX_ROWS + 1)
+        self.assertEqual(final["status"], "skipped_duplicate")
+        self.assertEqual(self.run_job("schedule-1", "scheduled"), first)
+        self.assertEqual([row["run_id"] for row in self.store.read(PUBLICATIONS)], [first])
 
     def test_repair_of_skipped_trigger_stays_pinned_when_new_decision_arrives(self):
         first = self.run_job("1")

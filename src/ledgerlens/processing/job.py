@@ -156,33 +156,36 @@ def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigge
     else:
         configuration = [PROCESSING_REVISION, "pypdf", extractor_version]
         allowed_adapters = {("pypdf", extractor_version)}
-    events = store.read(RUNS)
     current = latest_publication(store.read(PUBLICATIONS))
-    queued_by_id = {row["run_id"]: row for row in events if row["status"] == "queued"}
-    invocation_runs = {row["run_id"] for row in events if row["job_run_id"] == job_run_id}
+    invocation_runs = {row["run_id"] for row in store.read(RUNS, job_run_id=job_run_id)}
     if len(invocation_runs) > 1:
         raise ValueError("Job invocation maps to multiple logical runs")
     prior_run = next(iter(invocation_runs), None)
 
+    sequence = None
+
     def event(status, detail=None):
-        sequence = max((row["event_seq"] for row in events if row["run_id"] == run_id), default=0)
+        nonlocal sequence
+        if sequence is None:
+            latest = store.read(RUNS, run_id=run_id, latest_event=True)
+            sequence = latest[0]["event_seq"] if latest else 0
         row = {
             "run_id": run_id, "event_seq": sequence + 1, "event_at": clock(),
             "status": status, "detail_code": detail, "job_run_id": job_run_id,
             "trigger_type": trigger_type,
         }
         store.append(RUNS, [row])
-        events.append(row)
+        sequence = row["event_seq"]
         return row
 
     if prior_run is not None:
         run_id = prior_run
         if store.read(PUBLICATIONS, run_id=run_id):
-            if not any(row["run_id"] == run_id and row["status"] == "published" for row in events):
+            if not store.read(RUNS, run_id=run_id, event_status="published"):
                 event("published")
             event("skipped_duplicate")
             return run_id
-        queued = queued_by_id[run_id]
+        queued, = store.read(RUNS, run_id=run_id, event_status="queued")
         frozen = json.loads(queued["detail_code"])
         digest = frozen["input_digest"]
         if frozen["predecessor"] != (current["run_id"] if current else None):
@@ -193,17 +196,18 @@ def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigge
         current = latest_publication(data[PUBLICATIONS])
         if current and current["input_digest"] == digest:
             run_id = current["run_id"]
-            if not any(row["run_id"] == run_id and row["status"] == "published" for row in events):
+            if not store.read(RUNS, run_id=run_id, event_status="published"):
                 event("published")
             event("skipped_duplicate")
             return run_id
         predecessor = current["run_id"] if current else None
         run_id = fingerprint([predecessor, digest])
-        queued = queued_by_id.get(run_id)
-        if queued is None:
+        queued_events = store.read(RUNS, run_id=run_id, event_status="queued")
+        if not queued_events:
             frozen.update(input_digest=digest, predecessor=predecessor)
             queued = event("queued", json.dumps(frozen, sort_keys=True, separators=(",", ":")))
         else:
+            queued, = queued_events
             frozen = json.loads(queued["detail_code"])
 
     phase = "frozen_inputs"

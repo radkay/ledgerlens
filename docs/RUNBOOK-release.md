@@ -2,6 +2,10 @@
 
 Ron runs these steps in his separate administrator terminal and browser. The Build agent account prepares PRs against `dev`. Schedule one demo integration run and keep both Processing schedules paused through verification.
 
+## Before starting
+
+Check that the release candidate and its catalog schema are ready together. [The Gold history-view migration](https://github.com/radkay/ledgerlens/pull/51) changes the meaning of `current_*`. If the candidate includes it, coordinate the integration smoke and public App consumer changes before running the commands below. Any live Runtime agent consumer must use the same published-view contract before enablement. Keep schedules paused and use one cutover window for the provisioning and consumer release. The readiness report lists held PRs and the last integration run for each environment.
+
 ## 1. Reconcile dev, then demo
 
 From Ron's checkout of `radkay/ledgerlens`, use Databricks CLI 1.28.0, uv 0.9.18, GitHub CLI, and jq. Fetch the release candidate and use a separate worktree. The commands prompt for the existing radkay-lab workspace origin, Ron's workspace username, and the shared 2X-Small warehouse ID. Authenticate interactively as Ron.
@@ -64,6 +68,8 @@ fi
 ```
 
 Wait for the eligible push run to appear. If the release changed only paths outside the integration filter and there is no run for that commit, dispatch it once with `gh workflow run integration.yml --repo radkay/ledgerlens --ref main`. Confirm bundle deploy, Processing, Evaluation, published Gold lineage and accuracy, and denials for `silver.fields` and `eval.answer_key`. Keep the Actions URL and run IDs. On a quota, usage-limit, or capacity error, stop, record the time and run link in a draft PR titled **Quota hit**, and preserve the error. Schedule no retry or workaround.
+
+Use the [first demo evidence record](evidence/first-demo-integration.md) as a format for capturing the next verified run.
 
 ## 4. Deploy the public Streamlit app
 

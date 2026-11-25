@@ -87,7 +87,7 @@ def render(settings, *, public_only):
             return workspace.reader_token(client_id, client_secret)
 
         reader = GoldReader(Sql(workspace, warehouse, reader_token), environment)
-        if apps_user_auth and settings.get("LEDGERLENS_MODEL_ENDPOINT"):
+        if (apps_user_auth or public_only) and settings.get("LEDGERLENS_MODEL_ENDPOINT"):
             runtime_settings = {
                 "DATABRICKS_HOST": host,
                 "LEDGERLENS_CATALOG": CATALOGS[environment],
@@ -123,7 +123,7 @@ def render(settings, *, public_only):
     elif page == "Published outputs":
         show_outputs(reader)
     elif page == "Runtime agent":
-        show_runtime_panel(reader, fixture=source == "fixture", settings=runtime_settings)
+        show_runtime_panel(reader, fixture=source == "fixture", settings=runtime_settings, public=public_only)
     else:
         show_workbench(workbench)
     if source == "live":

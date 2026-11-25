@@ -23,6 +23,18 @@ class ReaderTransportTests(unittest.TestCase):
         self.config = ReaderConfig.from_settings(self.settings)
         self.workspace = ReaderWorkspace(self.config)
 
+    @patch("ledgerlens.mcp.databricks._post")
+    def test_public_gateway_uses_the_reader_token_and_pinned_service_name(self, post):
+        post.side_effect = [{"access_token": "reader-token", "expires_in": 3600}, {"choices": []}]
+        self.workspace.chat_gateway("databricks-gpt-oss-20b", {"messages": [], "model": "ignored"})
+        request = post.call_args
+        self.assertEqual(request.args[0], "https://workspace.example/ai-gateway/mlflow/v1/chat/completions")
+        self.assertEqual(request.args[1]["Authorization"], "Bearer reader-token")
+        self.assertEqual(json.loads(request.args[2]), {"messages": [], "model": "system.ai.gpt-oss-20b"})
+        with self.assertRaises(ValueError):
+            self.workspace.chat_gateway("other-endpoint", {})
+        self.assertEqual(post.call_count, 2)
+
     def test_requires_explicit_reader_catalog_warehouse_and_model(self):
         for key in (
             "LEDGERLENS_CATALOG", "LEDGERLENS_MODEL_ENDPOINT", "DATABRICKS_WAREHOUSE_ID",

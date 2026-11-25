@@ -8,7 +8,7 @@ import json
 from mcp import ClientSession
 
 from .databricks import DatabricksError, ReaderWorkspace, RuntimeConfig
-from .gold import GoldTools
+from .gold import GoldTools, PublishedGold
 from .server import TOOLS, published_session
 
 QUESTION_LIMIT = 500
@@ -154,3 +154,43 @@ async def ask(config: RuntimeConfig, question: str) -> Answer:
         return await answer_with_tools(
             question, session, lambda request: workspace.chat(config.endpoint, request), publication.run_id,
         )
+
+
+async def _preset_evidence(publication: PublishedGold, arguments: dict):
+    async with published_session(publication) as session:
+        return await session.call_tool("trace_value", arguments)
+
+
+def answer_preset(
+    question: str, publication: PublishedGold, output_field: str, complete: Callable[[dict], dict],
+) -> Answer:
+    """Read a preset's published Gold evidence and synthesize it in one model call."""
+    question = validate_question(question)
+    arguments = {"output_field": output_field}
+    result = asyncio.run(_preset_evidence(publication, arguments))
+    evidence = result.structuredContent
+    succeeded = not result.isError and isinstance(evidence, dict) and evidence.get("run_id") == publication.run_id
+    trace = (ToolCall("trace_value", arguments, publication.run_id if succeeded else None, succeeded),)
+    if not succeeded:
+        return Answer(NO_ANSWER, trace, False)
+
+    try:
+        response = complete({
+            "messages": [
+                {"role": "system", "content": (
+                    SYSTEM_PROMPT + " Rows can repeat across source links. Person-year values have "
+                    "no form type and can also appear in form prefill. Do not double-count them."
+                )},
+                {"role": "user", "content": json.dumps({"question": question, "trace_value": evidence})},
+            ],
+            "stream": False, "temperature": 0, "max_tokens": 768, "reasoning_effort": "low",
+        })
+        choice, = response["choices"]
+        message = choice["message"]
+        text = message["content"]
+        if (choice.get("finish_reason") == "stop" and message.get("role") == "assistant"
+                and isinstance(text, str) and text.strip()):
+            return Answer(text.strip(), trace, True)
+    except (DatabricksError, KeyError, TypeError, ValueError):
+        pass
+    return Answer(NO_ANSWER, trace, False)

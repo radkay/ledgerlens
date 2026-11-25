@@ -14,6 +14,11 @@ def stage_hosted_app(destination):
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     mcp_requirement, = (requirement for requirement in project["project"]["dependencies"]
                         if requirement.startswith("mcp=="))
+    requirements = app / "requirements.txt"
+    app_mcp_pins = [line for line in requirements.read_text(encoding="utf-8").splitlines()
+                    if line.startswith("mcp==")]
+    if app_mcp_pins != [mcp_requirement]:
+        raise ValueError("Pin the app to the same MCP version as the project.")
 
     destination.mkdir()
     for name in ("app.yaml", "streamlit_app.py"):
@@ -21,10 +26,7 @@ def stage_hosted_app(destination):
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
     shutil.copytree(app / "ledgerlens_ui", destination / "ledgerlens_ui", ignore=ignore)
     shutil.copytree(ledgerlens / "mcp", destination / "ledgerlens" / "mcp", ignore=ignore)
-    requirements = (app / "requirements.txt").read_text(encoding="utf-8").rstrip()
-    (destination / "requirements.txt").write_text(
-        f"{requirements}\n{mcp_requirement}\n", encoding="utf-8",
-    )
+    shutil.copyfile(requirements, destination / "requirements.txt")
 
 
 def main():

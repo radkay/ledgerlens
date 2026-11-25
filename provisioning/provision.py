@@ -249,9 +249,10 @@ def merge_fixture_rows(sql, table, columns, key_columns, rows):
     )
     match = " AND ".join(f"target.{name} = source.{name}" for name in key_columns)
     sql(f"""MERGE INTO {table} AS target
-USING (VALUES
+USING (SELECT * FROM VALUES
     {values}
-) AS source ({", ".join(names)})
+    AS v({", ".join(names)})
+) AS source
 ON {match}
 WHEN NOT MATCHED THEN INSERT *""", parameters)
 

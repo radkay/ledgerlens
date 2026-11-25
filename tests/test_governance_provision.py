@@ -197,6 +197,10 @@ class ProvisioningTests(unittest.TestCase):
     def assert_fixture_merge(self, invocation, table, columns, keys, rows):
         statement, parameters = invocation
         self.assertTrue(statement.startswith(f"MERGE INTO {table} AS target\n"))
+        self.assertNotRegex(statement, r"\)\s+AS\s+source\s*\(")
+        self.assertIn("USING (SELECT * FROM VALUES\n", statement)
+        column_names = ", ".join(name for name, _ in columns)
+        self.assertIn(f"AS v({column_names})\n) AS source\n", statement)
         self.assertIn("ON " + " AND ".join(f"target.{key} = source.{key}" for key in keys), statement)
         self.assertTrue(statement.endswith("WHEN NOT MATCHED THEN INSERT *"))
         self.assertEqual(parameters, tuple(

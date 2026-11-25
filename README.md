@@ -6,11 +6,14 @@ LedgerLens turns synthetic tax documents into reviewable, traceable outputs on D
 
 | Artifact | Link or status |
 |---|---|
-| Public Streamlit demo | `{{RELEASE:DEMO_APP_URL}}` |
+| Public Streamlit demo | [Open LedgerLens](https://rad-ledgerlens.streamlit.app) |
 | User guide | [How to use LedgerLens](docs/USER-GUIDE.md) |
-| Demo integration evidence for the release | `{{RELEASE:DEMO_RUN_URL}}` |
-| Publication and lineage walkthrough | `{{RELEASE:PUBLICATION_GIF}}` |
-| Reviewer workbench walkthrough | `{{RELEASE:REVIEW_GIF}}` |
+| Demo integration evidence for the release | [Release #85 demo Actions run](https://github.com/radkay/ledgerlens/actions/runs/45670994988) |
+| Publication and lineage walkthrough | [Watch the lineage trace](docs/media/lineage-trace.gif) |
+| Reviewer workbench walkthrough | [Watch the masked workbench](docs/media/masked-workbench.gif) |
+| Overview dashboard | [Watch the overview](docs/media/overview-dashboard.gif) |
+| Extraction confidence | [Watch the confidence panel](docs/media/confidence-panel.gif) |
+| Public Runtime agent | [Watch a preset question](docs/media/runtime-agent-panel.gif) |
 
 The [first demo integration run](https://github.com/radkay/ledgerlens/actions/runs/45540750902) verified bundle deployment, Processing, Evaluation, and the Gold smoke checks. The [release runbook](docs/RUNBOOK-release.md) covers rebuilding the catalogs, publishing the public app, and verifying a release.
 
@@ -65,20 +68,20 @@ The offline plan prints catalog DDL. To rebuild in Databricks, create the docume
 ## Build metrics
 
 <!-- build-metrics:start -->
-Snapshot through **2026-11-25 04:01 UTC**. **48 merged PRs** over **7h 44m** from the first merge (2026-11-24 20:16 UTC) to the latest.
+Snapshot through **2026-11-25 18:15 UTC**. **71 merged PRs** over **21h 58m** from the first merge (2026-11-24 20:16 UTC) to the latest.
 
 | Lane | Merged PRs |
 |---|---:|
-| first | 22 |
-| extraction | 6 |
-| processing | 7 |
-| app | 9 |
-| governance | 2 |
-| mcp | 2 |
+| first | 34 |
+| extraction | 8 |
+| processing | 8 |
+| app | 11 |
+| governance | 4 |
+| mcp | 6 |
 
-- **PR Metrics coverage.** 48/48 merged PRs have a Metrics section in their body.
-- **PR CI.** 180 distinct workflow runs linked to 48 merged PRs. 132 were additional event runs after a PR's first run and 0 were retries of the same run ID. 81 cancelled, 12 failure, 87 success.
-- **Review.** 14 findings in [REVIEW-LOG.md](docs/REVIEW-LOG.md).
+- **PR Metrics coverage.** 71/71 merged PRs have a Metrics section in their body.
+- **PR CI.** 298 distinct workflow runs linked to 71 merged PRs. 227 were additional event runs after a PR's first run and 0 were retries of the same run ID. 144 cancelled, 36 failure, 118 success.
+- **Review.** 15 findings in [REVIEW-LOG.md](docs/REVIEW-LOG.md).
 
 CI totals use GitHub Actions rather than free-text counts in PR bodies. Runs are matched by head branch and time from PR creation through merge. They cover merged PRs only. Canceled workflow runs are reported separately from failures. 0 runs with ambiguous matches were excluded. 0 merged PRs have no matching run in the returned history.
 <!-- build-metrics:end -->

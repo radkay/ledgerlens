@@ -62,7 +62,7 @@ jobs:
           export DATABRICKS_EVALUATION_JOB_ID
           files=$(jq -er '.workspace.file_path' <<< "$summary")
           job_id=$(jq -er '.resources.jobs.process.id | tostring | select(test("^[1-9][0-9]*$"))' <<< "$summary")
-          directory=$(databricks workspace get-status "$files" --output json)
+          directory=$(databricks workspace get-status "$files" --target "$BUNDLE_TARGET" --output json)
           directory_id=$(jq -er '.object_id' <<< "$directory")
           permissions=$(jq -n \
             --arg processor "$BUNDLE_VAR_processor_application_id" \
@@ -70,5 +70,5 @@ jobs:
             '{access_control_list: ([$processor, $evaluator] | map({
               service_principal_name: ., permission_level: "CAN_READ"
             }))}')
-          databricks workspace update-permissions directories "$directory_id" --json "$permissions" >/dev/null
+          databricks workspace update-permissions directories "$directory_id" --target "$BUNDLE_TARGET" --json "$permissions" >/dev/null
           DATABRICKS_JOB_ID="$job_id" uv run --no-sync python scripts/databricks_smoke.py

@@ -9,6 +9,7 @@ CREATE SCHEMA IF NOT EXISTS {catalog}.ops;
 
 CREATE VOLUME IF NOT EXISTS {catalog}.bronze.inbox;
 CREATE VOLUME IF NOT EXISTS {catalog}.eval.fixtures;
+CREATE VOLUME IF NOT EXISTS {catalog}.review.masked_previews;
 
 CREATE TABLE IF NOT EXISTS {catalog}.bronze.documents (
   doc_id STRING NOT NULL, content_sha256 STRING NOT NULL, file_path STRING NOT NULL,
@@ -80,6 +81,11 @@ CREATE TABLE IF NOT EXISTS {catalog}.gold.lineage (
 
 CREATE TABLE IF NOT EXISTS {catalog}.gold.review_summary (
   run_id STRING NOT NULL, status STRING NOT NULL, document_count BIGINT NOT NULL
+) USING DELTA;
+
+CREATE TABLE IF NOT EXISTS {catalog}.gold.confidence_summary (
+  run_id STRING NOT NULL, form_type STRING NOT NULL, confidence_bucket STRING NOT NULL,
+  count BIGINT NOT NULL
 ) USING DELTA;
 
 CREATE TABLE IF NOT EXISTS {catalog}.gold.extraction_accuracy (

@@ -123,41 +123,40 @@ class ProvisioningTests(unittest.TestCase):
             sql,
         )
 
-    def test_warehouse_legacy_grant_is_removed_and_rerun_is_a_noop(self):
+    def test_warehouse_never_replaces_acl_when_ron_has_direct_can_use(self):
         args = Namespace(workspace_profile="synthetic", warehouse_id="dead", ron_user="operator@example.invalid")
         apps = {"integration": "ci", "reader": "reader"}
         reviewers = "ledgerlens-dev-reviewers"
         existing = [
             {"user_name": args.ron_user, "all_permissions": [
                 {"permission_level": "CAN_USE", "inherited": False},
-                {"permission_level": "CAN_MANAGE", "inherited": True},
             ]},
+            {"group_name": "All workspace users", "all_permissions": [{"permission_level": "CAN_USE"}]},
             {"group_name": "ledgerlens-demo-reviewers", "all_permissions": [{"permission_level": "CAN_USE"}]},
-            {"group_name": "admins", "all_permissions": [{"permission_level": "CAN_MANAGE", "inherited": True}]},
             {"service_principal_name": "reader", "all_permissions": [{"permission_level": "CAN_MANAGE"}]},
         ]
         expected = [
-            {"group_name": "ledgerlens-demo-reviewers", "permission_level": "CAN_USE"},
-            {"service_principal_name": "reader", "permission_level": "CAN_MANAGE"},
             {"group_name": reviewers, "permission_level": "CAN_USE"},
             {"service_principal_name": "ci", "permission_level": "CAN_USE"},
         ]
-        with patch.object(provision, "dbx", side_effect=[{"access_control_list": existing}, {}]) as dbx:
-            provision.configure_warehouse(args, apps, reviewers)
-            self.assertEqual(dbx.call_args_list, [
-                call("synthetic", "permissions", "get", "warehouses", "dead"),
-                call("synthetic", "permissions", "set", "warehouses", "dead",
-                     payload={"access_control_list": expected}),
-            ])
-
-        applied = [
-            {key: name, "all_permissions": [{"permission_level": entry["permission_level"]}]}
-            for entry in expected
-            for key, name in entry.items() if key != "permission_level"
+        applied = existing + [
+            {"group_name": reviewers, "all_permissions": [{"permission_level": "CAN_USE"}]},
+            {"service_principal_name": "ci", "all_permissions": [{"permission_level": "CAN_USE"}]},
         ]
-        with patch.object(provision, "dbx", return_value={"access_control_list": applied}) as dbx:
+        with patch.object(provision, "dbx", side_effect=[
+            {"access_control_list": existing}, {}, {"access_control_list": applied},
+        ]) as dbx:
             provision.configure_warehouse(args, apps, reviewers)
-            dbx.assert_called_once_with("synthetic", "permissions", "get", "warehouses", "dead")
+            provision.configure_warehouse(args, apps, reviewers)
+
+        self.assertFalse(any(item.args[1:4] == ("permissions", "set", "warehouses")
+                             for item in dbx.call_args_list))
+        self.assertEqual(dbx.call_args_list, [
+            call("synthetic", "permissions", "get", "warehouses", "dead"),
+            call("synthetic", "permissions", "update", "warehouses", "dead",
+                 payload={"access_control_list": expected}),
+            call("synthetic", "permissions", "get", "warehouses", "dead"),
+        ])
 
     def test_warehouse_adds_group_without_replacing_existing_privileges(self):
         args = Namespace(workspace_profile="synthetic", warehouse_id="dead", ron_user="operator@example.invalid")

@@ -1,6 +1,8 @@
 """Deterministic synthetic fixtures and their separately stored answer keys."""
 
 import hashlib
+import zlib
+from contextlib import closing
 
 
 def synthetic_identifier(kind, serial):
@@ -28,15 +30,20 @@ def digital_w2(lines):
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         f"<< /Length {len(stream)} >>\nstream\n".encode("ascii") + stream + b"\nendstream",
     )
+    return _serialize_pdf(objects)
+
+
+def _serialize_pdf(objects):
     pdf = b"%PDF-1.4\n"
     offsets = []
     for index, contents in enumerate(objects, 1):
         offsets.append(len(pdf))
         pdf += f"{index} 0 obj\n".encode("ascii") + contents + b"\nendobj\n"
     startxref = len(pdf)
-    pdf += b"xref\n0 6\n0000000000 65535 f \n"
+    size = len(objects) + 1
+    pdf += f"xref\n0 {size}\n0000000000 65535 f \n".encode("ascii")
     pdf += b"".join(f"{offset:010d} 00000 n \n".encode("ascii") for offset in offsets)
-    return pdf + f"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{startxref}\n%%EOF\n".encode("ascii")
+    return pdf + f"trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{startxref}\n%%EOF\n".encode("ascii")
 
 
 def bootstrap_fixture():
@@ -111,3 +118,50 @@ def fixture_entry(pdf, fixture_id, form, person, expected_forms, fields, variant
         ],
     }
     return pdf, entry
+
+
+def scanned_fixtures():
+    """Render the synthetic digital set into separate image-only PDFs."""
+    fixtures = []
+    for digital_pdf, digital_entry in digital_fixtures():
+        pdf = _raster_pdf(digital_pdf)
+        fields = {item["field_name"]: item["expected_value"] for item in digital_entry["fields"]}
+        fixtures.append(fixture_entry(
+            pdf,
+            digital_entry["fixture_id"].removesuffix("-digital") + "-scanned",
+            digital_entry["form_type"],
+            digital_entry["person_key"],
+            digital_entry["expected_forms"],
+            fields,
+            variant="scanned",
+        ))
+    return fixtures
+
+
+def _raster_pdf(digital_pdf):
+    from pypdfium2 import PdfDocument
+
+    # The source fixtures are one page. Render at 144 dpi and discard the source objects.
+    with PdfDocument(digital_pdf) as source, closing(source[0]) as page:
+        with closing(page.render(scale=2, grayscale=True)) as bitmap:
+            width, height = bitmap.width, bitmap.height
+            pixels = b"".join(
+                bytes(bitmap.buffer[row:row + width])
+                for row in range(0, height * bitmap.stride, bitmap.stride)
+            )
+
+    compressed = zlib.compress(pixels, level=9)
+    image_header = (
+        f"<< /Type /XObject /Subtype /Image /Width {width} /Height {height} "
+        f"/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode "
+        f"/Length {len(compressed)} >>\nstream\n"
+    )
+    draw = b"q 612 0 0 792 0 0 cm /Scan Do Q"
+    return _serialize_pdf((
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /XObject << /Scan 4 0 R >> >> /Contents 5 0 R >>",
+        image_header.encode("ascii") + compressed + b"\nendstream",
+        f"<< /Length {len(draw)} >>\nstream\n".encode("ascii") + draw + b"\nendstream",
+    ))

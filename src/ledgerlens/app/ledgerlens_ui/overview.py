@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import streamlit as st
 
-from .dashboard import ACTIVE_BATCH_STATES, latest_batch_event, read_overview
+from .dashboard import read_batch_activity, read_overview
 
 POLL_INTERVAL_SECONDS = 2
 POLL_WINDOW_SECONDS = 120
@@ -53,9 +53,6 @@ def show_batches(operator=None, authorize=lambda: False):
 
     try:
         schedule = operator.schedule()
-        if not st.session_state.get("batch_job_run_id") and (active_job := operator.active_job_run()):
-            st.session_state["batch_job_run_id"] = active_job
-            st.session_state["batch_poll_until"] = time.monotonic() + POLL_WINDOW_SECONDS
     except (OSError, ValueError):
         st.error("The configured processing job is unavailable.")
         return
@@ -72,29 +69,34 @@ def show_batches(operator=None, authorize=lambda: False):
         job_run_id = st.session_state.get("batch_job_run_id")
         deadline = st.session_state.get("batch_poll_until")
         try:
-            event = latest_batch_event(operator, job_run_id) if job_run_id else None
-            active = bool(job_run_id and (event is None or event.status in ACTIVE_BATCH_STATES))
-            job_state = operator.terminal_job_state(job_run_id) if active else None
+            activity = read_batch_activity(operator, job_run_id)
         except OSError:
             if deadline and time.monotonic() > deadline:
                 del st.session_state["batch_poll_until"]
                 st.rerun()
             st.error("Batch status is temporarily unavailable.")
             return
-        if job_state:
-            active = False
-        if job_run_id:
+        if activity.job_run_id != job_run_id:
+            st.session_state["batch_job_run_id"] = activity.job_run_id
+            if activity.active:
+                st.session_state["batch_poll_until"] = time.monotonic() + POLL_WINDOW_SECONDS
+                st.rerun()
+        if activity.job_run_id:
+            event = activity.event
             status = event.status.replace("_", " ").capitalize() if event else "Waiting for pipeline events"
-            st.write(f"Batch {job_run_id} · {status}")
-            if job_state:
-                st.caption(f"Databricks job ended · {job_state.replace('_', ' ').title()}")
-        if deadline and (not active or time.monotonic() > deadline):
+            st.write(f"Batch {activity.job_run_id} · {status}")
+            if event:
+                st.caption(f"{event.trigger_type.capitalize()} · {event.event_at:%Y-%m-%d %H:%M:%S UTC}")
+            if activity.terminal_job_state:
+                state = activity.terminal_job_state.replace("_", " ").title()
+                st.caption(f"Databricks job ended · {state}")
+        if deadline and (not activity.active or time.monotonic() > deadline):
             del st.session_state["batch_poll_until"]
             st.rerun()
-        if active and not deadline and st.button("Resume status refresh"):
+        if activity.active and not deadline and st.button("Resume status refresh"):
             st.session_state["batch_poll_until"] = time.monotonic() + POLL_WINDOW_SECONDS
             st.rerun()
-        if st.button("Run batch", disabled=active):
+        if st.button("Run batch", disabled=activity.active):
             request_id = st.session_state.setdefault("batch_request_id", uuid4().hex)
             try:
                 st.session_state["batch_job_run_id"] = operator.run_batch(request_id)

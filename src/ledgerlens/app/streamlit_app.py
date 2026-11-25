@@ -27,9 +27,9 @@ def delegated_identity(workspace, environment):
     return (operator, token) if operator else (None, None)
 
 
-def read_credentials():
+def read_credentials(settings):
     names = ("DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET", "DATABRICKS_WAREHOUSE_ID")
-    values = tuple(environ.get(name) for name in names)
+    values = tuple(settings.get(name) for name in names)
     if not all(values):
         raise ValueError("Configure the reader credentials and explicit SQL warehouse.")
     return values
@@ -53,14 +53,15 @@ def diagnostics(workspace):
                     st.text(call)
 
 
-def render():
-    environment = environ.get("LEDGERLENS_ENVIRONMENT")
-    source = environ.get("LEDGERLENS_DATA_SOURCE", "fixture")
-    host = environ.get("DATABRICKS_HOST", "").rstrip("/")
+def render(settings, *, public_only):
+    environment = settings.get("LEDGERLENS_ENVIRONMENT")
+    source = settings.get("LEDGERLENS_DATA_SOURCE", "fixture")
+    host = settings.get("DATABRICKS_HOST", "").rstrip("/")
+    apps_user_auth = not public_only and bool(environ.get("DATABRICKS_APP_NAME"))
     if source not in {"live", "fixture"}:
         raise ValueError("Choose fixture or live as the data source.")
-    workspace = Workspace(host) if host and (source == "live" or environ.get("DATABRICKS_APP_NAME")) else None
-    identity, user_token = delegated_identity(workspace, environment)
+    workspace = Workspace(host) if host and (source == "live" or apps_user_auth) else None
+    identity, user_token = delegated_identity(workspace, environment) if apps_user_auth else (None, None)
     scope = (source, environment, host, identity.actor_id) if identity else None
     if not scope or st.session_state.get("operator_scope") != scope:
         clear_operator_state()
@@ -71,9 +72,9 @@ def render():
     if source == "live":
         if workspace is None or environment not in CATALOGS:
             raise ValueError("Configure the live workspace and environment.")
-        if not environ.get("DATABRICKS_APP_NAME") and environment != "demo":
+        if not apps_user_auth and environment != "demo":
             raise ValueError("Streamlit Community Cloud uses the demo environment.")
-        client_id, client_secret, warehouse = read_credentials()
+        client_id, client_secret, warehouse = read_credentials(settings)
 
         @lru_cache(maxsize=1)
         def reader_token():
@@ -83,7 +84,7 @@ def render():
         if identity:
             delegated = Sql(workspace, warehouse, lambda: user_token)
             workbench = LiveWorkbench(delegated, environment, identity.actor_id)
-            job_id = environ.get("LEDGERLENS_PROCESSING_JOB_ID")
+            job_id = settings.get("LEDGERLENS_PROCESSING_JOB_ID")
             if job_id and job_id.isascii() and job_id.isdecimal() and int(job_id) > 0:
                 batch = LiveBatch(delegated, environment, int(job_id))
     else:
@@ -112,13 +113,18 @@ def render():
         diagnostics(workspace)
 
 
-st.set_page_config(page_title="LedgerLens", layout="wide", menu_items={})
-st.title("LedgerLens")
-try:
-    render()
-except PermissionError:
-    st.error("Databricks denied access to the requested data.")
-except OSError:
-    st.error("Databricks data is temporarily unavailable. Refresh to try again.")
-except ValueError:
-    st.error("Check the app deployment configuration.")
+def main(settings=None, *, public_only=False):
+    st.set_page_config(page_title="LedgerLens", layout="wide", menu_items={})
+    st.title("LedgerLens")
+    try:
+        render(environ if settings is None else settings, public_only=public_only)
+    except PermissionError:
+        st.error("Databricks denied access to the requested data.")
+    except OSError:
+        st.error("Databricks data is temporarily unavailable. Refresh to try again.")
+    except ValueError:
+        st.error("Check the app deployment configuration.")
+
+
+if __name__ == "__main__":
+    main()

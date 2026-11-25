@@ -1,7 +1,9 @@
 import unittest
 from datetime import UTC, datetime, timedelta
 
-from src.ledgerlens.app.ledgerlens_ui.dashboard import latest_batch_event, read_overview
+from src.ledgerlens.app.ledgerlens_ui.dashboard import (
+    PipelineEvent, latest_batch_event, read_batch_activity, read_overview,
+)
 from src.ledgerlens.app.ledgerlens_ui.fixtures import PUBLISHED, FixtureBatch, FixtureReader
 
 
@@ -46,3 +48,30 @@ class OverviewTests(unittest.TestCase):
         now += timedelta(seconds=3)
         self.assertEqual(latest_batch_event(operator, run).status, "skipped_duplicate")
         self.assertNotEqual(run, operator.run_batch("request-2"))
+
+
+    def test_batch_adopts_a_scheduled_run_after_the_tracked_run_finishes(self):
+        now = datetime(2025, 11, 23, tzinfo=UTC)
+
+        class Operator(FixtureBatch):
+            def active_job_run(self):
+                return "scheduled"
+
+            def pipeline_runs(self, job_run_id):
+                status, trigger = ("published", "manual") if job_run_id == "previous" else ("running", "scheduled")
+                return [PipelineEvent(job_run_id, 1, now, status, job_run_id, trigger)]
+
+        activity = read_batch_activity(Operator(), "previous")
+        self.assertEqual(activity.job_run_id, "scheduled")
+        self.assertTrue(activity.active)
+        self.assertEqual(activity.event.trigger_type, "scheduled")
+
+    def test_batch_stops_if_jobs_reports_a_terminal_state_before_a_pipeline_event(self):
+        class Operator(FixtureBatch):
+            def terminal_job_state(self, job_run_id):
+                return "FAILED"
+
+        activity = read_batch_activity(Operator(), "job-without-events")
+        self.assertFalse(activity.active)
+        self.assertIsNone(activity.event)
+        self.assertEqual(activity.terminal_job_state, "FAILED")

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .dashboard import Accuracy, PipelineEvent, Publication
 
-from .outputs import Lineage, Prefill
+from .outputs import GoldValue, Lineage, Prefill
 from .workbench import Field, ReviewDocument, validate_decision
 
 PUBLISHED = Publication("fixture-publication-1", 1, datetime(2025, 11, 23, 16, tzinfo=UTC))
@@ -61,20 +61,28 @@ class FixtureReader:
     def extraction_accuracy(self, run_id):
         return [Accuracy("W-2", "digital", 4, 3)] if run_id == PUBLISHED.run_id else []
 
-    def lineage_keys(self, run_id, key):
-        return [getattr(FIXTURE_LINEAGE, key)] if run_id == PUBLISHED.run_id else []
+    def lineage_documents(self, run_id):
+        return [FIXTURE_LINEAGE.doc_id] if run_id == PUBLISHED.run_id else []
 
-    def lineage(self, run_id, *, doc_id=None, gold_row_id=None):
+    def lineage_values(self, run_id):
         if run_id != PUBLISHED.run_id:
             return []
-        if doc_id is not None and doc_id != FIXTURE_LINEAGE.doc_id:
-            return []
-        if gold_row_id is not None and gold_row_id != FIXTURE_LINEAGE.gold_row_id:
-            return []
-        return [FIXTURE_LINEAGE]
+        return [GoldValue(FIXTURE_PREFILL.gold_row_id, FIXTURE_PREFILL.output_field, FIXTURE_PREFILL.output_value)]
 
-    def prefill(self, run_id):
-        return [FIXTURE_PREFILL] if run_id == PUBLISHED.run_id else []
+    def lineage(self, run_id, *, doc_id=None, gold_row_id=None, output_field=None):
+        if doc_id is not None and gold_row_id is None and output_field is None:
+            matches = doc_id == FIXTURE_LINEAGE.doc_id
+        elif doc_id is None and gold_row_id is not None and output_field is not None:
+            matches = (gold_row_id, output_field) == (FIXTURE_LINEAGE.gold_row_id, FIXTURE_LINEAGE.output_field)
+        else:
+            raise ValueError("Select a source document or one Gold output field.")
+        return [FIXTURE_LINEAGE] if run_id == PUBLISHED.run_id and matches else []
+
+    def prefill_forms(self, run_id):
+        return [FIXTURE_PREFILL.form] if run_id == PUBLISHED.run_id else []
+
+    def prefill(self, run_id, form):
+        return [FIXTURE_PREFILL] if run_id == PUBLISHED.run_id and form == FIXTURE_PREFILL.form else []
 
 
 class FixtureBatch:

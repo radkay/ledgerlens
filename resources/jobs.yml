@@ -17,11 +17,11 @@ resources:
               - pypdfium2==5.15.0
               - reportlab==5.1.1
       tasks:
-        - task_key: bootstrap
+        - task_key: process
           environment_key: standard
           spark_python_task:
             python_file: ../src/ledgerlens/bootstrap_job.py
-            parameters: [process, '${var.catalog}', '{{job.trigger.type}}']
+            parameters: [process, '${var.catalog}', '{{job.trigger.type}}', '--job-run-id', '{{job.run_id}}', '--src', '${workspace.file_path}/src']
 
     evaluate:
       name: ledgerlens-${bundle.target}-evaluate
@@ -35,8 +35,8 @@ resources:
           spec:
             environment_version: '6'
       tasks:
-        - task_key: bootstrap
+        - task_key: evaluate
           environment_key: standard
           spark_python_task:
             python_file: ../src/ledgerlens/bootstrap_job.py
-            parameters: [evaluate, '${var.catalog}', '{{job.trigger.type}}']
+            parameters: [evaluate, '${var.catalog}', '{{job.trigger.type}}', '--src', '${workspace.file_path}/src']

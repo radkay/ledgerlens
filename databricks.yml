@@ -3,6 +3,7 @@ bundle:
   databricks_cli_version: '1.28.0'
 
 include:
+  - resources/apps.yml
   - resources/jobs.yml
 
 variables:
@@ -12,6 +13,9 @@ variables:
     description: Processing service principal application ID
   evaluator_application_id:
     description: Evaluation service principal application ID
+  processing_schedule_pause_status:
+    description: Pause status for the periodic processing job schedule
+    default: PAUSED
 
 sync:
   exclude:

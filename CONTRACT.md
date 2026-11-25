@@ -16,6 +16,7 @@ Proposed for Ron's approval before parallel implementation. All data is syntheti
 | Evaluator | ledgerlens-dev-evaluator | ledgerlens-demo-evaluator |
 | Integration / evidence | ledgerlens-dev-ci | ledgerlens-demo-evidence |
 | App Gold reader | ledgerlens-dev-reader | ledgerlens-demo-reader |
+| Databricks App | ledgerlens-dev-app | ledgerlens-demo-app |
 | Operator | Ron’s Databricks user | Ron’s Databricks user |
 | Reviewer group | ledgerlens-dev-reviewers | ledgerlens-demo-reviewers |
 
@@ -25,7 +26,7 @@ For every service principal grant workspace access, USE CATALOG only on its cata
 
 | Identity | Grants within own catalog |
 |---|---|
-| processor | READ VOLUME on bronze.inbox. SELECT on bronze.expected_forms. SELECT and MODIFY on bronze.documents, bronze.extractions, silver.fields, gold.person_year, gold.missing_documents, gold.prefill, gold.lineage, gold.review_summary, ops.pipeline_runs, ops.publications, ops.document_releases. SELECT on review.decisions and review.reason_codes. |
+| processor | READ VOLUME on bronze.inbox. SELECT on bronze.expected_forms. SELECT and MODIFY on bronze.documents, bronze.extractions, silver.fields, gold.person_year, gold.missing_documents, gold.prefill, gold.lineage, gold.review_summary, gold.confidence_summary, ops.pipeline_runs, ops.publications, ops.document_releases. SELECT on review.decisions and review.reason_codes. |
 | evaluator | READ VOLUME on eval.fixtures. SELECT on eval.answer_key, bronze.documents, bronze.extractions and ops.publications. SELECT and MODIFY on gold.extraction_accuracy. |
 | ci / evidence | SELECT on the serving views listed below and ops.pipeline_runs. Owns the matching bundled jobs and has Service Principal User on the matching processor and evaluator. |
 | reader | SELECT on the serving views listed below. Optional CAN QUERY on the explicit model endpoint after the live probe. |
@@ -36,7 +37,9 @@ Configure jobs with their matching run-as identities. Use Delta append-only prop
 
 The credentialed integration workflow deploys the matching bundle before running the processing job. On dev, ledgerlens-dev-ci deploys and owns the dev jobs. On main, ledgerlens-demo-evidence deploys and owns the demo jobs. Both deployers use workspace access without an administrator role and grant their processor and evaluator read access to the deployed source files. The workflow resolves the processing job ID from the matching bundle deployment state.
 
-GitHub environment secret: DATABRICKS_CLIENT_SECRET. Environment variables: DATABRICKS_HOST, DATABRICKS_CLIENT_ID, DATABRICKS_WAREHOUSE_ID, DATABRICKS_PROCESSOR_APPLICATION_ID, DATABRICKS_EVALUATOR_APPLICATION_ID. Streamlit Community Cloud receives the demo reader's corresponding host, client ID, secret and warehouse ID. Authenticated operator actions use Ron’s delegated Databricks user identity and require membership in the matching reviewer group. The public app uses only the reader identity. Each repository readiness variable is false or unset until its own environment is provisioned and its workflow can deploy and run the publication-capable jobs for the live smoke test. A host-managed Databricks App principal receives reader grants once its resolved identity is recorded. Record the actual hosted model endpoint and managed dbsql MCP endpoint before claiming hands-on use.
+GitHub environment secret: DATABRICKS_CLIENT_SECRET. Environment variables: DATABRICKS_HOST, DATABRICKS_CLIENT_ID, DATABRICKS_WAREHOUSE_ID, DATABRICKS_PROCESSOR_APPLICATION_ID, DATABRICKS_EVALUATOR_APPLICATION_ID. Streamlit Community Cloud receives the demo reader's corresponding host, client ID, secret and warehouse ID. Authenticated operator actions use Ron’s delegated Databricks user identity and require membership in the matching reviewer group. The public app uses only the reader identity. Each repository readiness variable is false or unset until its own environment is provisioned and its workflow can deploy and run the publication-capable jobs for the live smoke test. Only the demo bundle includes a Databricks App. The demo reviewer group has CAN_USE on it. Its host-managed principal receives reader grants once its resolved identity is recorded. Record the actual hosted model endpoint and managed dbsql MCP endpoint before claiming hands-on use.
+
+The optional GitHub environment variable LEDGERLENS_PROCESSING_SCHEDULE_PAUSE_STATUS selects PAUSED or UNPAUSED for the matching Processing job schedule. Both targets start PAUSED. The periodic schedule is daily at 09:00 UTC and invokes the same Processing job as a manual run.
 
 ## Tables
 
@@ -55,13 +58,14 @@ IDs and keys are STRING unless stated, timestamps are UTC TIMESTAMP, and tax_yea
 | gold.prefill | run_id, gold_row_id, person_key, tax_year, form_type, output_field, output_value?. Key run/person/year/form/field. |
 | gold.lineage | run_id, gold_row_id, output_field, doc_id, field_id, extraction_id, decision_id?, extractor_name, extractor_version, model_name?, model_version?. Key run/Gold row/output field/source field. |
 | gold.review_summary | run_id, status, document_count BIGINT. Key run/status. |
+| gold.confidence_summary | run_id, form_type, confidence_bucket, count BIGINT. Key run/form type/confidence bucket. Count is the number of released Silver field rows in the bucket. |
 | gold.extraction_accuracy | run_id, form_type, variant, expected_count BIGINT, exact_match_count BIGINT. Key run/form/variant, evaluator-written. |
 | eval.answer_key | fixture_id, doc_id, field_id, field_name, expected_value, variant, form_type. Key fixture/field. |
 | ops.pipeline_runs | run_id, event_seq BIGINT, event_at, status, detail_code?, job_run_id, trigger_type. Key run/event sequence. |
 | ops.document_releases | run_id, doc_id, extraction_id, status. Key run/document. Status is released or recalled. Write the applicable release transitions before the publication marker. |
 | ops.publications | publication_seq BIGINT, run_id, published_at, input_digest. Unique run and strictly increasing publication sequence. |
 
-Serving views in gold: latest_publication (run_id, publication_seq, published_at), current_person_year, current_missing_documents, current_prefill, current_lineage, current_review_summary, current_extraction_accuracy, current_document_state. Gold snapshot result views join to the publication ledger to expose published history only. Resolve the latest run once per request, then filter every snapshot read by that run ID. Accuracy can arrive after publication and the UI reports pending for that run. The dashboard displays live document status from gold.current_document_state alongside pinned publication metrics. This view exposes doc_id, status and state_at. It folds received documents, extraction attempts, accepted decisions and document release events ordered by timestamp, then event kind (received, extraction, decision, publication), then stable event ID. Release events join ops.publications, so incomplete runs do not advance document state. The masked review.current_workbench uses the same state projection and includes the latest Silver field rows for the current extraction when available. Missing-document output compares bronze.expected_forms to the release. Missing forms can have no contributing document fields.
+Serving views in gold: latest_publication (run_id, publication_seq, published_at), current_person_year, current_missing_documents, current_prefill, current_lineage, current_review_summary, current_confidence_summary, current_extraction_accuracy, current_document_state. Gold snapshot result views join to the publication ledger to expose published history only. Resolve the latest run once per request, then filter every snapshot read by that run ID. Accuracy can arrive after publication and the UI reports pending for that run. The dashboard displays live document status from gold.current_document_state alongside pinned publication metrics. This view exposes doc_id, status and state_at. It folds received documents, extraction attempts, accepted decisions and document release events ordered by timestamp, then event kind (received, extraction, decision, publication), then stable event ID. Release events join ops.publications, so incomplete runs do not advance document state. The masked review.current_workbench uses the same state projection and includes the latest Silver field rows for the current extraction when available. Missing-document output compares bronze.expected_forms to the release. Missing forms can have no contributing document fields.
 
 ## State and publication
 
@@ -72,6 +76,8 @@ Decision actions and initial reasons: approve/verified, correct_field/extraction
 Use content SHA-256 as doc_id. For field_id, SHA-256 the UTF-8 text `{doc_id}:{canonical_field_name}:{occurrence}` with occurrence numbered from one. Each attempt has a stable extraction_id, including deliberate reprocess attempts. Manual and scheduled invocations run the same job, with max concurrent runs 1. Use the digest of the frozen logical inputs and processing configuration to identify repeated triggers. Retries resume incomplete appends under the same logical run_id. Run-stamp all Silver and Gold publication payloads. Validate completeness, uniqueness, release states and lineage coverage before appending the publication record. A failed or partial run leaves the last successful release visible. Consumers pin their reads to one published run. A recall removes the document from the next release without changing earlier release contents.
 
 Required acceptance tests cover derived status and publication-gated recall, partial and failed runs, identical replay output, duplicate PDF, duplicate decision, duplicate job trigger, original lineage retention, reader and integration denial checks, and reviewer masking.
+
+After replay and release selection, the Processing job groups released Silver field rows by form type and original extraction confidence. Store bucket labels `[0, 0.5)`, `[0.5, 0.8)`, `[0.8, 1]`, and `Unreported` for null scores. Validate that scores fall within [0, 1] and bucket counts sum to the released field count for each form type. Append the run-stamped counts before the publication marker. The rows expose aggregate counts without field or document identifiers or values. Grant the reader SELECT on gold.current_confidence_summary.
 
 ## Fixture interface
 

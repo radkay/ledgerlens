@@ -16,6 +16,7 @@ GRAINS = {
     "gold.prefill": ("person_key", "tax_year", "form_type", "output_field"),
     "gold.lineage": ("gold_row_id", "output_field", "field_id"),
     "gold.review_summary": ("status",),
+    "gold.confidence_summary": ("form_type", "confidence_bucket"),
     "ops.document_releases": ("doc_id",),
 }
 DESCRIPTOR = re.compile(r"^Synthetic (W-2|1099|1098) - ([0-9]{4}) - LedgerLens Sample$", re.MULTILINE)
@@ -55,6 +56,30 @@ def silver_projection(row):
     if row["field_name"] in IDENTIFIERS:
         return row | {"extracted_value": None, "final_value": None}
     return row
+
+
+def released_confidence_buckets(fields):
+    counts = Counter()
+    for field in fields:
+        score = field["confidence"]
+        if score is None:
+            bucket = "Unreported"
+        else:
+            if type(score) not in (int, float) or not 0 <= score <= 1:
+                raise ValueError("Silver confidence is outside [0, 1]")
+            bucket = "[0, 0.5)" if score < 0.5 else "[0.5, 0.8)" if score < 0.8 else "[0.8, 1]"
+        if field["status"] == "released":
+            counts[field["form_type"], bucket] += 1
+    return counts
+
+
+def validate_confidence_summary(tables):
+    expected = released_confidence_buckets(tables["silver.fields"])
+    rows = unique(tables["gold.confidence_summary"], GRAINS["gold.confidence_summary"])
+    if any(type(row["count"]) is not int or row["count"] <= 0 for row in rows.values()):
+        raise ValueError("Invalid confidence bucket count")
+    if {key: row["count"] for key, row in rows.items()} != expected:
+        raise ValueError("Confidence buckets do not match released Silver fields")
 
 
 def build_snapshot(run_id, states, inventory):
@@ -149,6 +174,8 @@ def build_snapshot(run_id, states, inventory):
 
     for status, count in sorted(Counter(state.status for state in states.values()).items()):
         add("gold.review_summary", status=status, document_count=count)
+    for (form, bucket), count in sorted(released_confidence_buckets(tables["silver.fields"]).items()):
+        add("gold.confidence_summary", form_type=form, confidence_bucket=bucket, count=count)
     return tables
 
 

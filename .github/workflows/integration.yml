@@ -21,10 +21,9 @@ permissions:
 jobs:
   integration:
     if: >-
-      ${{ (github.event_name == 'push' && github.ref == 'refs/heads/dev' &&
-           vars.LEDGERLENS_INTEGRATION_READY_DEV == 'true') ||
-          (github.ref == 'refs/heads/main' &&
-           vars.LEDGERLENS_INTEGRATION_READY_DEMO == 'true') }}
+      ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          ((github.ref == 'refs/heads/dev' && vars.LEDGERLENS_INTEGRATION_READY_DEV == 'true') ||
+           (github.ref == 'refs/heads/main' && vars.LEDGERLENS_INTEGRATION_READY_DEMO == 'true')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: ${{ github.ref == 'refs/heads/dev' && 'ledgerlens-dev' || 'ledgerlens-demo' }}
@@ -44,6 +43,7 @@ jobs:
         with:
           version: '1.28.0'
       - name: Deploy bundle and verify job and published Gold
+        id: publication
         env:
           DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
@@ -55,6 +55,8 @@ jobs:
           BUNDLE_VAR_processing_schedule_pause_status: ${{ vars.LEDGERLENS_PROCESSING_SCHEDULE_PAUSE_STATUS || 'PAUSED' }}
           BUNDLE_TARGET: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'demo' }}
           LEDGERLENS_CATALOG: ${{ github.ref == 'refs/heads/dev' && 'ledgerlens_dev' || 'ledgerlens_demo' }}
+          LEDGERLENS_SMOKE_PUBLISHED_VIEWS: ${{ vars.LEDGERLENS_SMOKE_PUBLISHED_VIEWS }}
+          LEDGERLENS_SMOKE_RASTER_DEV: ${{ vars.LEDGERLENS_SMOKE_RASTER_DEV }}
         shell: bash
         run: |
           databricks bundle deploy --target "$BUNDLE_TARGET" --auto-approve
@@ -73,3 +75,27 @@ jobs:
             }))}')
           databricks workspace update-permissions directories "$directory_id" --target "$BUNDLE_TARGET" --json "$permissions" >/dev/null
           DATABRICKS_JOB_ID="$job_id" uv run --no-sync python scripts/databricks_smoke.py
+
+      - name: Verify custom MCP and Runtime agent on dev
+        if: github.ref == 'refs/heads/dev' && vars.LEDGERLENS_MCP_SMOKE_READY_DEV == 'true'
+        env:
+          PYTHONPATH: src
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_WAREHOUSE_ID: ${{ vars.DATABRICKS_WAREHOUSE_ID }}
+          DATABRICKS_READER_CLIENT_ID: ${{ vars.DATABRICKS_READER_CLIENT_ID }}
+          DATABRICKS_READER_CLIENT_SECRET: ${{ secrets.DATABRICKS_READER_CLIENT_SECRET }}
+          LEDGERLENS_CATALOG: ledgerlens_dev
+          LEDGERLENS_EXPECTED_RUN_ID: ${{ steps.publication.outputs.publication_run_id }}
+          LEDGERLENS_MODEL_ENDPOINT: ${{ vars.LEDGERLENS_MODEL_ENDPOINT }}
+        run: uv run --no-sync python -m ledgerlens.mcp.smoke
+      - name: Verify managed dbsql MCP on dev
+        if: github.ref == 'refs/heads/dev' && vars.LEDGERLENS_MCP_SMOKE_READY_DEV == 'true'
+        env:
+          DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+          DATABRICKS_WAREHOUSE_ID: ${{ vars.DATABRICKS_WAREHOUSE_ID }}
+          DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          LEDGERLENS_CATALOG: ledgerlens_dev
+          LEDGERLENS_EXPECTED_RUN_ID: ${{ steps.publication.outputs.publication_run_id }}
+          LEDGERLENS_MANAGED_MCP_URL: ${{ vars.LEDGERLENS_MANAGED_MCP_URL }}
+        run: uv run --no-sync python docs/evidence/managed_dbsql_mcp.py

@@ -22,7 +22,7 @@ class ProvisioningTests(unittest.TestCase):
             self.assertIn(f"ALTER TABLE {table} SET TBLPROPERTIES ('delta.appendOnly' = 'true')", statements)
             query = (
                 f"SELECT snapshot.* FROM {table} AS snapshot\n"
-                f"JOIN {catalog}.ops.publications AS publication ON snapshot.run_id = publication.run_id"
+                f"JOIN {catalog}.gold.latest_publication AS publication ON snapshot.run_id = publication.run_id"
             )
             self.assertIn(f"CREATE VIEW IF NOT EXISTS {view} AS\n{query}", statements)
             self.assertIn(f"ALTER VIEW {view} AS\n{query}", statements)
@@ -36,6 +36,7 @@ class ProvisioningTests(unittest.TestCase):
     def assert_grant_matrix(self, env, deployer):
         catalog = f"ledgerlens_{env}"
         group = f"ledgerlens-{env}-reviewers"
+        identifiers = f"ledgerlens-{env}-identifier-readers"
         args = Namespace(environment=env, workspace_profile="synthetic", warehouse_id="dead",
                          ron_user="operator@example.invalid")
         principal_ids = ("processor", "evaluator", deployer, "reader")
@@ -47,6 +48,8 @@ class ProvisioningTests(unittest.TestCase):
                 {"applicationId": name} for name in principal_ids
             ]) as find,
             patch.object(provision, "create_reviewer_group", return_value=group),
+            patch.object(provision, "ensure_account_group", return_value=("group-path", 54)) as account_group,
+            patch.object(provision, "assign_sql_group") as group_assignment,
             patch.object(provision, "configure_entitlements") as entitlements,
             patch.object(provision, "configure_warehouse") as warehouse,
             patch.object(provision, "seed_fixture"),
@@ -60,9 +63,11 @@ class ProvisioningTests(unittest.TestCase):
         ])
         self.assertEqual([item.kwargs["sql_client"] for item in entitlements.call_args_list],
                          [False, False, True, True])
+        account_group.assert_called_once_with("synthetic", identifiers)
+        group_assignment.assert_called_once_with("synthetic", 54)
         warehouse.assert_called_once_with(args, dict(zip(
             ("processor", "evaluator", "integration", "reader"), principal_ids, strict=True,
-        )), group)
+        )), (group, identifiers))
 
         outputs = (
             "bronze.documents", "bronze.extractions", "silver.fields", "gold.person_year",
@@ -73,7 +78,9 @@ class ProvisioningTests(unittest.TestCase):
             "gold.latest_publication", "gold.current_person_year", "gold.current_missing_documents",
             "gold.current_prefill", "gold.current_lineage", "gold.current_review_summary",
             "gold.current_confidence_summary", "gold.current_extraction_accuracy",
-            "gold.current_document_state",
+            "gold.current_document_state", "gold.published_person_year", "gold.published_missing_documents",
+            "gold.published_prefill", "gold.published_lineage", "gold.published_review_summary",
+            "gold.published_confidence_summary", "gold.published_extraction_accuracy",
         )
         workbench = ("gold.current_document_state", "review.current_workbench",
                      "review.reason_codes", "ops.pipeline_runs")
@@ -97,6 +104,7 @@ class ProvisioningTests(unittest.TestCase):
             "reader": {"USE SCHEMA": ("gold",), "SELECT": serving},
             group: {"USE SCHEMA": ("gold", "review", "ops"), "SELECT": workbench,
                     "MODIFY": ("review.decisions",), "READ VOLUME": ("review.masked_previews",)},
+            identifiers: {"USE SCHEMA": ("silver",), "SELECT": ("silver.fields",)},
             args.ron_user: {"USE SCHEMA": ("bronze",), "READ VOLUME": ("bronze.inbox",)},
         }
         kinds = {"USE SCHEMA": "SCHEMA", "SELECT": "TABLE", "MODIFY": "TABLE",
@@ -146,8 +154,8 @@ class ProvisioningTests(unittest.TestCase):
         with patch.object(provision, "dbx", side_effect=[
             {"access_control_list": existing}, {}, {"access_control_list": applied},
         ]) as dbx:
-            provision.configure_warehouse(args, apps, reviewers)
-            provision.configure_warehouse(args, apps, reviewers)
+            provision.configure_warehouse(args, apps, (reviewers,))
+            provision.configure_warehouse(args, apps, (reviewers,))
 
         self.assertFalse(any(item.args[1:4] == ("permissions", "set", "warehouses")
                              for item in dbx.call_args_list))
@@ -164,9 +172,10 @@ class ProvisioningTests(unittest.TestCase):
             {"user_name": args.ron_user, "all_permissions": [{"permission_level": "IS_OWNER"}]},
         ]}
         with patch.object(provision, "dbx", side_effect=[acl, {}]) as dbx:
-            provision.configure_warehouse(args, {"integration": "ci", "reader": "reader"}, "reviewers")
+            provision.configure_warehouse(args, {"integration": "ci", "reader": "reader"}, ("reviewers", "identifier-readers"))
         self.assertEqual(dbx.call_args, call(
             "synthetic", "permissions", "update", "warehouses", "dead", payload={"access_control_list": [
+                {"group_name": "identifier-readers", "permission_level": "CAN_USE"},
                 {"group_name": "reviewers", "permission_level": "CAN_USE"},
                 {"service_principal_name": "ci", "permission_level": "CAN_USE"},
                 {"service_principal_name": "reader", "permission_level": "CAN_USE"},
@@ -192,7 +201,7 @@ class ProvisioningTests(unittest.TestCase):
             patch.object(provision, "dbx", side_effect=[
                 {"Resources": []}, {"id": "3"}, {"id": "3", "members": []}, None,
             ]) as dbx,
-            patch.object(provision, "assign_reviewer_group") as assign,
+            patch.object(provision, "assign_sql_group") as assign,
         ):
             self.assertEqual(provision.create_reviewer_group(args, ron), "ledgerlens-demo-reviewers")
         self.assertEqual(dbx.call_args_list[1:3], [
@@ -208,7 +217,7 @@ class ProvisioningTests(unittest.TestCase):
             patch.object(provision, "dbx", side_effect=[
                 {"Resources": [{"id": "3"}]}, {"id": "3", "members": [{"value": "2"}]},
             ]) as dbx,
-            patch.object(provision, "assign_reviewer_group") as assign,
+            patch.object(provision, "assign_sql_group") as assign,
         ):
             self.assertEqual(provision.create_reviewer_group(args, ron), "ledgerlens-demo-reviewers")
         self.assertEqual(dbx.call_count, 2)
@@ -218,7 +227,7 @@ class ProvisioningTests(unittest.TestCase):
         path = "/api/2.0/identity/workspace-assignments"
         entitlements = ["DATABRICKS_SQL_ACCESS", "WORKSPACE_ACCESS"]
         with patch.object(provision, "dbx", side_effect=[{}, None]) as dbx:
-            provision.assign_reviewer_group("synthetic", 3)
+            provision.assign_sql_group("synthetic", 3)
         self.assertEqual(dbx.call_args, call(
             "synthetic", "api", "post", path, payload={"principal_id": 3, "entitlements": entitlements},
         ))
@@ -227,12 +236,12 @@ class ProvisioningTests(unittest.TestCase):
         with patch.object(provision, "dbx", side_effect=[
             {"next_page_token": "next/page"}, assignment, {"entitlements": ["WORKSPACE_ACCESS"]}, None,
         ]) as dbx:
-            provision.assign_reviewer_group("synthetic", 3)
+            provision.assign_sql_group("synthetic", 3)
         self.assertEqual(dbx.call_args_list[1], call("synthetic", "api", "get", f"{path}?page_token=next%2Fpage"))
         self.assertEqual(dbx.call_args, call(
             "synthetic", "api", "patch", f"{path}/3?update_mask=entitlements",
             payload={"principal_id": 3, "entitlements": entitlements},
         ))
         with patch.object(provision, "dbx", side_effect=[assignment, {"entitlements": entitlements}]) as dbx:
-            provision.assign_reviewer_group("synthetic", 3)
+            provision.assign_sql_group("synthetic", 3)
         self.assertEqual(dbx.call_count, 2)

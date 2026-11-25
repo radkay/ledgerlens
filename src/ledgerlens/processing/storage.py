@@ -29,14 +29,21 @@ class DeltaStore:
     def version(self, table):
         return self.spark.sql(f"DESCRIBE HISTORY {self.name(table)} LIMIT 1").first()["version"]
 
-    def read(self, table, *, version=None, run_id=None):
+    def read(self, table, *, version=None, run_id=None, job_run_id=None, event_status=None,
+             latest_event=False):
+        if (job_run_id is not None or event_status is not None or latest_event) and table != "ops.pipeline_runs":
+            raise ValueError("Run event filters require the pipeline ledger")
         source = self.name(table)
         if version is not None:
             source += f" VERSION AS OF {int(version)}"
-        where = " WHERE run_id = :run_id" if run_id is not None else ""
-        args = {"run_id": run_id} if where else {}
+        args = {column: value for column, value in (
+            ("run_id", run_id), ("job_run_id", job_run_id), ("status", event_status),
+        ) if value is not None}
+        where = " WHERE " + " AND ".join(f"{column} = :{column}" for column in args) if args else ""
+        order = " ORDER BY event_seq DESC" if latest_event else ""
+        limit = 1 if latest_event else MAX_ROWS + 1
         rows = self.spark.sql(
-            f"SELECT * FROM {source}{where} LIMIT {MAX_ROWS + 1}", args=args,
+            f"SELECT * FROM {source}{where}{order} LIMIT {limit}", args=args,
         ).collect()
         if len(rows) > MAX_ROWS:
             raise ValueError("Table exceeds the synthetic job row limit")

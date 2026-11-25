@@ -24,11 +24,7 @@ def show_workbench(operator):
     left, right = st.columns(2)
     with left:
         st.subheader("Masked PDF")
-        pdf = operator.preview(doc_id)
-        if pdf is None:
-            st.info("A verified masked preview is unavailable.")
-        else:
-            st.pdf(pdf, height=540, key=f"pdf-{doc_id}")
+        show_preview(operator, document)
     with right:
         st.subheader("Extracted fields")
         for field in document.fields:
@@ -44,6 +40,26 @@ def show_workbench(operator):
         if not document.fields:
             st.caption("No fields are available for the current extraction.")
         show_decisions(operator, document)
+
+
+def show_preview(operator, document):
+    try:
+        available = operator.preview_pages(document)
+        if not available:
+            st.info("A verified masked preview is unavailable for this extraction.")
+            return
+
+        key = f"{document.doc_id}-{document.extraction_id}"
+        first_page = available[0] + 1
+        page = st.number_input("Page", min_value=1, value=first_page, step=1, key=f"page-{key}")
+        st.caption("Available pages · " + ", ".join(str(index + 1) for index in available))
+        pdf = operator.preview(document, page - 1) if page - 1 in available else None
+    except OSError:
+        pdf = None
+    if pdf is None:
+        st.info("A verified masked preview is unavailable for this page.")
+    else:
+        st.pdf(pdf, height=540, key=f"pdf-{key}-{page}")
 
 
 def show_decisions(operator, document):

@@ -19,6 +19,7 @@ IDENTIFIER_FIELD = re.compile(
 )
 IDENTIFIER_VALUE = re.compile(r"(?<!\d)(?:\d{3}-\d{2}-\d{4}|\d{2}-\d{7})(?!\d)")
 MASKED = "[masked]"
+CATALOG_LAST_FOUR = re.compile(r"[*]{4}[0-9]{4}")
 
 
 @dataclass(frozen=True)
@@ -28,13 +29,22 @@ class Field:
     extracted_value: str | None
     final_value: str | None
     confidence: float | None
+    catalog_masked: bool = False
 
     def masked(self):
         if IDENTIFIER_FIELD.search(self.field_name):
-            return replace(self, extracted_value=MASKED, final_value=MASKED)
+            return replace(
+                self, extracted_value=self.visible_identifier(self.extracted_value),
+                final_value=self.visible_identifier(self.final_value),
+            )
         return replace(
             self, extracted_value=mask_text(self.extracted_value), final_value=mask_text(self.final_value),
         )
+
+    def visible_identifier(self, value):
+        if self.catalog_masked and isinstance(value, str) and CATALOG_LAST_FOUR.fullmatch(value):
+            return value
+        return MASKED
 
 
 @dataclass(frozen=True)

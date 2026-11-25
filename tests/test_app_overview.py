@@ -2,7 +2,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 
 from src.ledgerlens.app.ledgerlens_ui.dashboard import (
-    PipelineEvent, latest_batch_event, read_batch_activity, read_overview,
+    Confidence, PipelineEvent, latest_batch_event, read_batch_activity, read_overview,
 )
 from src.ledgerlens.app.ledgerlens_ui.fixtures import PUBLISHED, FixtureBatch, FixtureReader
 
@@ -14,9 +14,9 @@ class OverviewTests(unittest.TestCase):
                 calls.append("pin")
                 return PUBLISHED
 
-            def confidence_scores(self, run_id):
+            def confidence_summary(self, run_id):
                 calls.append(run_id)
-                return super().confidence_scores(run_id)
+                return super().confidence_summary(run_id)
 
             def review_summary(self, run_id):
                 calls.append(run_id)
@@ -32,7 +32,7 @@ class OverviewTests(unittest.TestCase):
         self.assertEqual(publication, PUBLISHED)
         self.assertEqual(live["received"], 1)
         self.assertNotIn("received", review)
-        self.assertEqual(confidence, {"[0, 0.5)": 1, "[0.5, 0.8)": 1, "[0.8, 1]": 2, "Unreported": 2})
+        self.assertEqual(confidence, [Confidence("W-2", "[0.8, 1]", 2), Confidence("W-2", "Unreported", 1)])
         self.assertEqual(accuracy, [])
 
     def test_batch_uses_latest_event_and_deduplicates_submission(self):

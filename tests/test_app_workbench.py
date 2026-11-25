@@ -36,12 +36,25 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(replace(field, extracted_value="000123456").masked().extracted_value, "[masked]")
         self.assertEqual(Field("field", "notes", "SSN 000-12-3456", None, None).masked().extracted_value,
                          "SSN [masked]")
-        self.assertIn(b"Employee SSN: [masked]", operator.preview(before.doc_id))
+        self.assertIn(b"Employee SSN: [masked]", operator.preview(before, 0))
+        self.assertEqual(operator.preview_pages(before), [0])
+        self.assertIsNone(operator.preview(before, 1))
         decision = Decision("decision-1", before.doc_id, before.extraction_id, field.field_id,
                             "correct_field", "extraction_error", "000-12-3456", "operator", before.state_at)
         with self.assertRaises(ValueError):
             operator.append_decision(decision, before.state_at)
         self.assertEqual(operator.document(before.doc_id), before)
+
+    def test_only_catalog_last_four_tokens_survive_workbench_masking(self):
+        field = Field("id", "employee_ssn", "****1234", "****5678", None, catalog_masked=True)
+        self.assertEqual(field.masked().masked().extracted_value, "****1234")
+        self.assertEqual(field.masked().final_value, "****5678")
+        self.assertEqual(replace(field, catalog_masked=False).masked().extracted_value, "[masked]")
+        for value in (None, "000123456", "000-12-3456", "*****1234", "****12345",
+                      "****１２３４", "****1234 ", "****1234\n"):
+            with self.subTest(value=value):
+                masked = replace(field, extracted_value=value, final_value=value).masked()
+                self.assertEqual((masked.extracted_value, masked.final_value), ("[masked]", "[masked]"))
 
     def test_enforces_actor_reason_extraction_and_idempotent_append(self):
         operator = FixtureWorkbench("operator")

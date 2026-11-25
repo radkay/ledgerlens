@@ -4,7 +4,12 @@ Ron runs these steps in his separate administrator terminal and browser. The Bui
 
 ## Before starting
 
-Check that the release candidate and its catalog schema are ready together. [The Gold history-view migration](https://github.com/radkay/ledgerlens/pull/51) changes the meaning of `current_*`. If the candidate includes it, coordinate the integration smoke and public App consumer changes before running the commands below. Any live Runtime agent consumer must use the same published-view contract before enablement. Keep schedules paused and use one cutover window for the provisioning and consumer release. The readiness report lists held PRs and the last integration run for each environment.
+Keep both Processing schedules paused. Use the same reviewed `dev` SHA for both catalogs and the release PR. [#51](https://github.com/radkay/ledgerlens/pull/51) adds published history and changes `current_*` to the latest snapshot. Match the schema and consumers in this order.
+
+1. **Prepare the repository.** The [App in #68](https://github.com/radkay/ledgerlens/pull/68) and the [MCP implementation from #63](https://github.com/radkay/ledgerlens/pull/63) pin a run on the `published_*` views. Land their code together to share one standard dev integration run. Keep the new reader surfaces inactive and `LEDGERLENS_MCP_SMOKE_READY_DEV` unset. [#67](https://github.com/radkay/ledgerlens/pull/67) keeps standard smoke on the currently provisioned view family until its environment flag changes.
+2. **Approve masking if it is in this release.** [#52](https://github.com/radkay/ledgerlens/pull/52) follows the App's exact-token regression and CODEOWNERS approval on its merge head. Include it in the reviewed SHA before provisioning if its migration is part of this release. The identifier reader groups start empty.
+3. **At 6 a.m., apply dev first.** Run the regular dev command below. Verify the new Gold views and dev reader and CI grants. If the SHA contains #52, verify both Silver mask bindings and the workbench's exact last-four token. Set `LEDGERLENS_SMOKE_PUBLISHED_VIEWS=true` in the `ledgerlens-dev` GitHub environment only after those checks. Defer optional live dev probes until their credentials and endpoints are configured and the demo quota is reserved.
+4. **Apply demo second.** When the App consumers are release-ready, run the regular demo command from the same SHA. Confirm the demo views and grants. If reviewed [#65](https://github.com/radkay/ledgerlens/pull/65) is in the SHA and the hosted App will be enabled, run its app-only reader grant after the regular demo apply. Then set `LEDGERLENS_SMOKE_PUBLISHED_VIEWS=true` in `ledgerlens-demo`. Ron merges the release with a merge commit and confirms the one demo run before deploying the new reader surface.
 
 ## 1. Reconcile dev, then demo
 
@@ -32,14 +37,41 @@ git worktree add --detach "$release_checkout" origin/dev
   uv run --no-sync python provisioning/provision.py dev \
     --workspace-profile radkay-lab --warehouse-id "$warehouse_id" --ron-user "$ron_workspace_user"
   printf 'ledgerlens_dev provisioned at %s\n' "$(git rev-parse --short HEAD)"
+)
 
+
+```
+
+Verify dev and set its history-view smoke variable before starting demo. Use the same worktree, non-secret warehouse ID and workspace username, and the existing authenticated Ron profile.
+
+```bash
+(
+  set -e
+  cd "$release_checkout"
+  read -r -p 'Ron workspace username: ' ron_workspace_user
+  read -r -p 'Existing shared 2X-Small SQL warehouse ID: ' warehouse_id
+  export UV_CACHE_DIR=.uv-cache
   uv run --no-sync python provisioning/provision.py demo \
     --workspace-profile radkay-lab --warehouse-id "$warehouse_id" --ron-user "$ron_workspace_user"
   printf 'ledgerlens_demo provisioned at %s\n' "$(git rev-parse --short HEAD)"
 )
 ```
 
-Both commands must exit 0. A failed dev apply stops the sequence before demo. Verify the seeded fixture and manifest, the scoped reviewer and reader grants, and the existing warehouse `CAN_USE` grants in each catalog. [Workspace-user CLI authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication)
+When #65 is included and the hosted App will be enabled, run the App-only grant after demo provisioning. Keep its identity record outside the repository.
+
+```bash
+(
+  set -e
+  cd "$release_checkout"
+  read -r -p 'Ron workspace username: ' ron_workspace_user
+  read -r -p 'Existing shared 2X-Small SQL warehouse ID: ' warehouse_id
+  export UV_CACHE_DIR=.uv-cache
+  uv run --no-sync python provisioning/provision.py demo --demo-app-reader \
+    --workspace-profile radkay-lab --warehouse-id "$warehouse_id" --ron-user "$ron_workspace_user"
+)
+```
+
+Both commands must exit 0. Start demo after the dev verification succeeds. Verify the seeded fixture and manifest, the scoped reviewer and reader grants, and the existing warehouse `CAN_USE` grants in each catalog. [Workspace-user CLI authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication)
 
 ## 2. Merge the release PR
 

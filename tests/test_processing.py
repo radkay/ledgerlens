@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -17,7 +18,7 @@ from ledgerlens.processing.job import (
 )
 from ledgerlens.processing.lineage import trace_wages
 from ledgerlens.processing.replay import ACTIONS, field_id
-from ledgerlens.processing.snapshot import silver_projection
+from ledgerlens.processing.snapshot import build_snapshot, silver_projection
 
 START = datetime(2025, 1, 1, tzinfo=UTC)
 PERSON = "fixture-person-001"
@@ -156,6 +157,34 @@ class ProcessingTests(unittest.TestCase):
         self.assertEqual({row["status"] for row in self.store.serving("gold.review_summary")}, {"released"})
         self.assertTrue(all(row["final_decimal"] is None for row in self.store.read("silver.fields")
                             if row["field_name"] != "wages"))
+
+    def test_inconsistent_gold_snapshot_never_writes_a_publication_marker(self):
+        first = self.run_job("1")
+        self.store.append(INVENTORY, [{"person_key": PERSON, "tax_year": 2025, "expected_form": "1098"}])
+
+        for table, mutate, error in (
+            ("gold.lineage", lambda rows: rows.pop(), "Gold lineage"),
+            ("gold.lineage", lambda rows: rows[0].update(extraction_id="other"), "Gold lineage"),
+            ("gold.person_year", lambda rows: rows[0].update(wages=Decimal("1.00")), "Gold amount"),
+            ("gold.prefill", lambda rows: rows.clear(), "missing released form outputs"),
+            ("gold.missing_documents", lambda rows: rows.pop(), "expected inventory"),
+        ):
+            def broken_snapshot(*args):
+                payload = build_snapshot(*args)
+                mutate(payload[table])
+                return payload
+
+            with self.subTest(table=table, error=error), patch(
+                "ledgerlens.processing.job.build_snapshot", side_effect=broken_snapshot,
+            ):
+                with self.assertRaisesRegex(ValueError, error):
+                    self.run_job("2")
+                self.assertEqual(self.store.serving("gold.person_year")[0]["run_id"], first)
+                self.assertEqual(len(self.store.read(PUBLICATIONS)), 1)
+                self.assertEqual(self.store.read(RUNS)[-1]["detail_code"], "snapshot_validation")
+
+        self.assertNotEqual(self.run_job("2"), first)
+        self.assertEqual(len(self.store.read(PUBLICATIONS)), 2)
 
     def test_partial_recall_keeps_last_good_release_and_retry_resumes_exact_frozen_run(self):
         first = self.run_job("1")

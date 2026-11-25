@@ -6,6 +6,7 @@ import json
 import re
 
 from .replay import AMOUNT_FIELDS, FORM_IDENTIFIERS, IDENTIFIERS, MONEY, amount, fields_for, fingerprint
+from .storage import unique
 
 
 GRAINS = {
@@ -149,3 +150,63 @@ def build_snapshot(run_id, states, inventory):
     for status, count in sorted(Counter(state.status for state in states.values()).items()):
         add("gold.review_summary", status=status, document_count=count)
     return tables
+
+
+def validate_gold_lineage(tables, inventory):
+    """Require each published Gold value to match its released sources."""
+    sources = defaultdict(list)
+    for field in tables["silver.fields"]:
+        form = field["form_type"]
+        if field["status"] == "released" and field["field_name"] == AMOUNT_FIELDS[form]:
+            if field["final_decimal"] is None:
+                raise ValueError("Released Silver amount is missing")
+            sources[field["person_key"], field["tax_year"], form].append(field)
+
+    expected = {}
+
+    def require_edges(output, output_field, fields):
+        for field in fields:
+            key = (output["gold_row_id"], output_field, field["field_id"])
+            if key in expected:
+                raise ValueError("Duplicate Gold lineage edge")
+            expected[key] = {
+                "run_id": output["run_id"],
+                "gold_row_id": output["gold_row_id"],
+                "output_field": output_field,
+                "doc_id": field["doc_id"],
+                "field_id": field["field_id"],
+                "decision_id": field["decision_id"],
+                **provenance(field),
+            }
+
+    person_year = unique(tables["gold.person_year"], GRAINS["gold.person_year"])
+    prefill = unique(tables["gold.prefill"], GRAINS["gold.prefill"])
+    missing = unique(tables["gold.missing_documents"], GRAINS["gold.missing_documents"])
+    expected_prefill = {(*key, AMOUNT_FIELDS[key[2]]) for key in sources}
+    if person_year.keys() != {key[:2] for key in sources} or prefill.keys() != expected_prefill:
+        raise ValueError("Gold snapshot is missing released form outputs")
+    if missing.keys() != inventory or sources.keys() - missing.keys():
+        raise ValueError("Gold missing-document snapshot does not cover the expected inventory")
+
+    for (person, year), row in person_year.items():
+        for form, name in AMOUNT_FIELDS.items():
+            fields = sources.get((person, year, form), [])
+            total = sum(field["final_decimal"] for field in fields) if fields else None
+            if row[name] != total:
+                raise ValueError("Gold amount does not match its released Silver fields")
+            require_edges(row, name, fields)
+            if fields:
+                output = prefill[person, year, form, name]
+                if output["output_value"] != str(total):
+                    raise ValueError("Gold prefill does not match its released Silver fields")
+                require_edges(output, name, fields)
+
+    for key, row in missing.items():
+        fields = sources.get(key, [])
+        if row["status"] != ("present" if fields else "missing"):
+            raise ValueError("Missing-document status does not match the released forms")
+        require_edges(row, "status", fields)
+
+    actual = unique(tables["gold.lineage"], GRAINS["gold.lineage"])
+    if actual != expected:
+        raise ValueError("Gold lineage does not match the released Silver fields")

@@ -16,6 +16,7 @@ from ledgerlens.mcp.databricks import DatabricksError, oauth_token, workspace_or
 
 CANDIDATE_PATH = "/ai-gateway/mcp-services/system.ai.dbsql"
 READ_TOOL = "execute_sql_read_only"
+SQL_TOOL = "execute_sql"
 POLL_TOOL = "poll_sql_result"
 QUERY = """
 SELECT p.run_id
@@ -26,10 +27,28 @@ WHERE EXISTS (
 LIMIT 1
 """
 POLL_LIMIT = 12
+TOOL_PAGE_LIMIT = 10
 
 
 class ProbeError(RuntimeError):
     """A managed MCP probe failure with a log-safe description."""
+
+
+async def _listed_tool_names(session: ClientSession) -> set[str]:
+    names = set()
+    params = None
+    for _ in range(TOOL_PAGE_LIMIT):
+        page = await session.list_tools(params=params)
+        names.update(tool.name for tool in page.tools)
+        if not page.nextCursor:
+            break
+        params = types.PaginatedRequestParams(cursor=page.nextCursor)
+
+    safe_names = sorted(name for name in names if re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name))
+    print(json.dumps({"managed_tools": safe_names, "redacted_tool_names": len(names) - len(safe_names)}), flush=True)
+    if page.nextCursor:
+        raise ProbeError("Managed dbsql MCP tool discovery exceeded the page limit.")
+    return names
 
 
 async def _call(session, name, arguments, *, meta=None) -> dict:
@@ -49,10 +68,13 @@ async def _call(session, name, arguments, *, meta=None) -> dict:
 
 
 async def query_publication(session: ClientSession, warehouse: str, expected_run_id: str | None) -> dict:
-    names = {tool.name for tool in (await session.list_tools()).tools}
-    if not {READ_TOOL, POLL_TOOL} <= names:
-        raise ProbeError("Managed dbsql MCP is missing the required tools.")
-    payload = await _call(session, READ_TOOL, {"query": QUERY}, meta={"warehouse_id": warehouse})
+    names = await _listed_tool_names(session)
+    if POLL_TOOL not in names:
+        raise ProbeError(f"Managed dbsql MCP did not list {POLL_TOOL}.")
+    if not names.intersection({READ_TOOL, SQL_TOOL}):
+        raise ProbeError(f"Managed dbsql MCP did not list {READ_TOOL} or {SQL_TOOL}.")
+    execution_tool = READ_TOOL if READ_TOOL in names else SQL_TOOL
+    payload = await _call(session, execution_tool, {"query": QUERY}, meta={"warehouse_id": warehouse})
     statement_id = payload.get("statement_id")
     if not isinstance(statement_id, str) or not re.fullmatch(r"[a-zA-Z0-9-]{1,100}", statement_id):
         raise ProbeError("Managed MCP did not return a valid statement ID.")
@@ -77,7 +99,10 @@ async def query_publication(session: ClientSession, warehouse: str, expected_run
     run_id = rows[0][0]
     if expected_run_id and run_id != expected_run_id:
         raise ProbeError("Managed MCP used a different publication from the dev smoke.")
-    return {"managed_tool": READ_TOOL, "run_id": run_id, "statement_id": statement_id, "polls": polls, "row_count": 1}
+    return {
+        "managed_tool": execution_tool, "run_id": run_id, "statement_id": statement_id,
+        "polls": polls, "row_count": 1,
+    }
 
 
 async def run(settings) -> dict:

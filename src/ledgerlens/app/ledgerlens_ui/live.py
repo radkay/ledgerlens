@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from .dashboard import Accuracy, PipelineEvent, Publication, Schedule
 from .fixtures import ASSETS
-from .outputs import Form, GoldValue, Lineage, Prefill
+from .outputs import ExpectedDocument, Form, GoldValue, Lineage, PersonYear, Prefill
 from .workbench import Field, ReviewDocument, validate_decision
 
 CATALOGS = {"dev": "ledgerlens_dev", "demo": "ledgerlens_demo"}
@@ -127,6 +127,24 @@ class GoldReader:
             ORDER BY gold_row_id, output_field, doc_id, field_id
         """, run_id=run_id, **parameters)
         return [Lineage(*row) for row in rows]
+
+    def person_years(self, run_id):
+        rows = self.sql.execute(f"""
+            SELECT person_key, tax_year, wages, other_income, mortgage_interest
+            FROM {self.gold}.current_person_year WHERE run_id = :run_id
+            ORDER BY person_key, tax_year DESC
+        """, run_id=run_id)
+        return [PersonYear(person, int(year), wages, income, interest)
+                for person, year, wages, income, interest in rows]
+
+    def expected_documents(self, run_id):
+        rows = self.sql.execute(f"""
+            SELECT person_key, tax_year, expected_form, status
+            FROM {self.gold}.current_missing_documents WHERE run_id = :run_id
+            ORDER BY person_key, tax_year DESC, expected_form
+        """, run_id=run_id)
+        return [ExpectedDocument(person, int(year), form, status)
+                for person, year, form, status in rows]
 
     def prefill_forms(self, run_id):
         rows = self.sql.execute(f"""

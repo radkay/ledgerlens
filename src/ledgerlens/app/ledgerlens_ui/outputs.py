@@ -32,6 +32,23 @@ class GoldValue:
 
 
 @dataclass(frozen=True)
+class PersonYear:
+    person_key: str
+    tax_year: int
+    wages: str | None
+    other_income: str | None
+    mortgage_interest: str | None
+
+
+@dataclass(frozen=True)
+class ExpectedDocument:
+    person_key: str
+    tax_year: int
+    expected_form: str
+    status: str
+
+
+@dataclass(frozen=True)
 class Form:
     person_key: str
     tax_year: int

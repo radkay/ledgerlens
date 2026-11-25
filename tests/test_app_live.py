@@ -49,6 +49,22 @@ class LiveAdapterTests(unittest.TestCase):
         for body in statements[2:]:
             self.assertEqual(body["parameters"], [{"name": "run_id", "value": "publication-1", "type": "STRING"}])
 
+    def test_coverage_reads_gold_for_one_publication_and_keeps_missing_only_taxpayers(self):
+        self.workspace.responses = [
+            result([["person-1", "2025", "0.00", None, "250.21"]]),
+            result([["person-2", "2025", "1099", "missing"]]),
+        ]
+        reader = GoldReader(self.reader_sql, "demo")
+        total, = reader.person_years("publication-1")
+        expected, = reader.expected_documents("publication-1")
+        self.assertEqual((total.tax_year, total.wages, total.other_income), (2025, "0.00", None))
+        self.assertEqual((expected.person_key, expected.status), ("person-2", "missing"))
+        for call, view in zip(self.workspace.calls, ("current_person_year", "current_missing_documents"), strict=True):
+            payload = call[3]["json"]
+            self.assertIn(f"ledgerlens_demo.gold.{view} WHERE run_id = :run_id", payload["statement"])
+            self.assertEqual(payload["parameters"], [{"name": "run_id", "value": "publication-1", "type": "STRING"}])
+            self.assertEqual(call[2], "reader")
+
     def test_reverse_lineage_binds_the_exact_output_field_and_publication(self):
         self.workspace.responses = [result([["row-1", "wages", "25000.00"]]), result([])]
         reader = GoldReader(self.reader_sql, "demo")

@@ -28,7 +28,7 @@ def show_overview(reader):
 
     st.subheader("Extraction confidence")
     if confidence is None:
-        st.info("Confidence distribution is unavailable for this publication.")
+        st.info("Confidence distribution is pending for this publication.")
     else:
         st.bar_chart({"Confidence": list(confidence), "Fields": list(confidence.values())},
                      x="Confidence", y="Fields", sort=False)

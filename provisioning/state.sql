@@ -72,10 +72,8 @@ WITH recent_fields AS (
   ) = 1
 )
 SELECT d.doc_id, d.status, d.state_at, d.extraction_id, f.field_id, f.field_name,
-       CASE WHEN lower(f.field_name) NOT RLIKE '(^|[^a-z])(ssn|tin|itin|ein|atin|social[^a-z]+security[^a-z]+number|taxpayer[^a-z]+identification[^a-z]+number)([^a-z]|$)'
-         THEN f.extracted_value END AS extracted_value,
-       CASE WHEN lower(f.field_name) NOT RLIKE '(^|[^a-z])(ssn|tin|itin|ein|atin|social[^a-z]+security[^a-z]+number|taxpayer[^a-z]+identification[^a-z]+number)([^a-z]|$)'
-         THEN f.final_value END AS final_value,
+       {catalog}.silver.mask_workbench_identifier(f.extracted_value, f.field_name) AS extracted_value,
+       {catalog}.silver.mask_workbench_identifier(f.final_value, f.field_name) AS final_value,
        f.confidence, f.bbox_json, f.decision_id
 FROM {catalog}.review.document_state AS d
 LEFT JOIN recent_fields AS f ON d.doc_id = f.doc_id AND d.extraction_id = f.extraction_id;

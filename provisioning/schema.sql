@@ -113,12 +113,28 @@ CREATE TABLE IF NOT EXISTS {catalog}.ops.document_releases (
   run_id STRING NOT NULL, doc_id STRING NOT NULL, extraction_id STRING NOT NULL, status STRING NOT NULL
 ) USING DELTA;
 
+CREATE OR REPLACE FUNCTION {catalog}.silver.is_identifier_field(field_name STRING)
+RETURNS BOOLEAN
+RETURN coalesce(regexp_like(lower(field_name),
+  '(^|[^a-z])(ssn|tin|itin|ein|atin|social[^a-z]+security[^a-z]+number|taxpayer[^a-z]+identification[^a-z]+number)([^a-z]|$)'), false);
+
+CREATE OR REPLACE FUNCTION {catalog}.silver.mask_workbench_identifier(value STRING, field_name STRING)
+RETURNS STRING
+RETURN CASE
+  WHEN NOT {catalog}.silver.is_identifier_field(field_name) THEN value
+  WHEN regexp_like(value, r'^[*]{{4}}[0-9]{{4}}\z') THEN value
+  WHEN regexp_like(value, r'^([0-9]{{9}}|[0-9]{{3}}[- ][0-9]{{2}}[- ][0-9]{{4}}|[0-9]{{2}}[- ][0-9]{{7}})\z')
+    THEN concat('****', substr(value, -4))
+  ELSE CAST(NULL AS STRING)
+END;
+
 CREATE OR REPLACE FUNCTION {catalog}.silver.mask_identifier(value STRING, field_name STRING)
 RETURNS STRING
 RETURN CASE
-  WHEN lower(field_name) RLIKE '(^|[^a-z])(ssn|tin|itin|ein|atin|social[^a-z]+security[^a-z]+number|taxpayer[^a-z]+identification[^a-z]+number)([^a-z]|$)'
-    THEN CAST(NULL AS STRING)
-  ELSE value
+  WHEN NOT {catalog}.silver.is_identifier_field(field_name) THEN value
+  WHEN is_account_group_member('{identifier_readers}') THEN value
+  WHEN is_account_group_member('{reviewers}') THEN {catalog}.silver.mask_workbench_identifier(value, field_name)
+  ELSE CAST(NULL AS STRING)
 END;
 
 ALTER TABLE {catalog}.silver.fields

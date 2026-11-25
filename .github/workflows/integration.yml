@@ -21,10 +21,9 @@ permissions:
 jobs:
   integration:
     if: >-
-      ${{ (github.event_name == 'push' && github.ref == 'refs/heads/dev' &&
-           vars.LEDGERLENS_INTEGRATION_READY_DEV == 'true') ||
-          (github.ref == 'refs/heads/main' &&
-           vars.LEDGERLENS_INTEGRATION_READY_DEMO == 'true') }}
+      ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          ((github.ref == 'refs/heads/dev' && vars.LEDGERLENS_INTEGRATION_READY_DEV == 'true') ||
+           (github.ref == 'refs/heads/main' && vars.LEDGERLENS_INTEGRATION_READY_DEMO == 'true')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: ${{ github.ref == 'refs/heads/dev' && 'ledgerlens-dev' || 'ledgerlens-demo' }}

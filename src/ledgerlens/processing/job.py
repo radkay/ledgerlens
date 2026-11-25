@@ -241,7 +241,7 @@ def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigge
             phase = "masked_previews"
             for state in states.values():
                 preview_volume.write_attempt(inbox, state.attempt)
-        phase = "snapshot_validation"
+            phase = "snapshot_validation"
         for table, rows in tables.items():
             projection = {"silver.fields": silver_projection}.get(table)
             options = {"projection": projection} if projection else {}

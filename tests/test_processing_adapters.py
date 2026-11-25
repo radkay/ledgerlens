@@ -3,16 +3,17 @@
 from datetime import timedelta
 from decimal import Decimal
 from hashlib import sha256
+from io import BytesIO
 import json
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ledgerlens.processing.adapters import ExtractorPlan, Stage, managed_extractor_plan
-from ledgerlens.processing.job import EXTRACTIONS, INVENTORY, PUBLICATIONS, publish
+from ledgerlens.processing.job import EXTRACTIONS, INVENTORY, PUBLICATIONS, publish, run
 from ledgerlens.processing.replay import AMOUNT_FIELDS, FORM_IDENTIFIERS
 from tests.test_processing import MemoryInbox, MemoryStore, PERSON, START
 
@@ -53,7 +54,7 @@ class ExtractorPlanTests(unittest.TestCase):
         self.assertEqual(result["status"], "needs_review")
         self.assertEqual(result["extractor_name"], "ai_parse_document")
         self.assertEqual([call[0] for call in self.calls], ["pypdf", "raster", "ai_parse_document"])
-        self.assertEqual(plan.configuration()[1][-1], ["ai_parse_document", "test", [], True])
+        self.assertEqual(plan.configuration()[1][-1], ["ai_parse_document", "test", [], True, False])
 
     def test_terminal_digital_failure_and_unreported_managed_confidence(self):
         plan = ExtractorPlan((
@@ -183,9 +184,13 @@ class ExtractorPlanTests(unittest.TestCase):
                 for index, line in enumerate(lines)
             ]},
         })}
-        plan = managed_extractor_plan(spark)
-        run_id = publish(store, inbox, plan, job_run_id="real-raster", trigger_type="manual",
-                         clock=lambda: START)
+        with patch("ledgerlens.processing.job.DeltaStore", return_value=store), patch(
+            "ledgerlens.processing.job.Inbox", return_value=inbox,
+        ):
+            run_id = run(spark, "ledgerlens_dev", "real-raster", "one_time")
+            self.assertEqual(run(spark, "ledgerlens_dev", "same-content", "periodic"), run_id)
+            store.append(INVENTORY, [{"person_key": PERSON, "tax_year": 2025, "expected_form": "1098"}])
+            self.assertNotEqual(run(spark, "ledgerlens_dev", "new-inventory", "one_time"), run_id)
         spark.sql.assert_called_once()
         self.assertEqual(spark.sql.call_args.kwargs, {"args": {"document": bytearray(raster)}})
         attempts = {row["doc_id"]: row for row in store.read(EXTRACTIONS)}
@@ -218,3 +223,81 @@ class ExtractorPlanTests(unittest.TestCase):
         self.assertEqual(store.serving("gold.review_summary")[0]["status"], "needs_review")
         self.assertEqual(store.serving("gold.person_year"), [])
         self.assertEqual(store.serving("silver.fields"), [])
+
+    def test_vector_only_pdf_does_not_call_managed_parser(self):
+        from reportlab.pdfgen.canvas import Canvas
+
+        output = BytesIO()
+        canvas = Canvas(output, invariant=1)
+        canvas.rect(10, 10, 30, 30)
+        canvas.save()
+        pdf = output.getvalue()
+        spark = Mock()
+        attempt = managed_extractor_plan(spark)(pdf, sha256(pdf).hexdigest(), "vector")
+        self.assertEqual(attempt["error_code"], "no_text_layer")
+        spark.sql.assert_not_called()
+
+    def test_interrupted_scan_batch_reuses_the_previous_managed_result(self):
+        from ledgerlens.extraction import extract_digital_pdf
+        from provisioning.fixtures import digital_fixtures, scanned_fixtures
+
+        store, inbox = MemoryStore(), MemoryInbox()
+        inbox.pdfs.clear()
+        responses = {}
+        for (raster, entry), (digital, source) in zip(
+            scanned_fixtures()[:2], digital_fixtures()[:2], strict=True,
+        ):
+            inbox.pdfs[entry["sha256"]] = raster
+            original = extract_digital_pdf(digital, source["sha256"], "original")
+            lines = json.loads(original["raw_json"])["pages"][0].splitlines()
+            responses[entry["sha256"]] = json.dumps({"document": {"elements": [
+                {"type": "text", "id": index, "content": line} for index, line in enumerate(lines)
+            ]}})
+
+        calls = []
+
+        def parse(_statement, *, args):
+            doc_id = sha256(args["document"]).hexdigest()
+            calls.append(doc_id)
+            if len(calls) == 2:
+                raise RuntimeError("simulated second scan failure")
+            response = Mock()
+            response.first.return_value = {"parsed_json": responses[doc_id]}
+            return response
+
+        spark = Mock()
+        spark.sql.side_effect = parse
+        plan = managed_extractor_plan(spark)
+
+        def invoke():
+            return publish(store, inbox, plan, job_run_id="scan-batch", trigger_type="manual",
+                           clock=lambda: START)
+
+        with self.assertRaisesRegex(RuntimeError, "second scan failure"):
+            invoke()
+        first, = store.read(EXTRACTIONS)
+        self.assertEqual(first["doc_id"], calls[0])
+        self.assertEqual(store.read(PUBLICATIONS), [])
+        invoke()
+        self.assertEqual(calls, [*sorted(inbox.pdfs), max(inbox.pdfs)])
+        self.assertEqual(len(store.read(EXTRACTIONS)), 2)
+
+    def test_repair_preserves_the_original_digital_only_plan(self):
+        from ledgerlens.extraction import extract_digital_pdf
+        from provisioning.fixtures import bootstrap_fixture
+        from pypdf import __version__
+
+        store, inbox = MemoryStore(), MemoryInbox()
+        pdf, entry = bootstrap_fixture()
+        inbox.pdfs = {entry["sha256"]: pdf}
+        store.failure = PUBLICATIONS
+        with self.assertRaisesRegex(RuntimeError, "interrupted append"):
+            publish(store, inbox, extract_digital_pdf, extractor_version=__version__,
+                    job_run_id="legacy", trigger_type="manual", clock=lambda: START)
+
+        spark = Mock()
+        run_id = publish(store, inbox, managed_extractor_plan(spark), job_run_id="legacy",
+                         trigger_type="manual", clock=lambda: START)
+        attempt, = store.read(EXTRACTIONS)
+        self.assertEqual(attempt["run_id"], run_id)
+        spark.sql.assert_not_called()

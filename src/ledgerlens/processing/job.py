@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 
-from .adapters import ExtractorPlan
+from .adapters import ExtractorPlan, managed_extractor_plan
 from .replay import canonical_decisions, classify, fingerprint, replay
 from .snapshot import GRAINS, MetadataError, build_snapshot, metadata, silver_projection
 from .storage import MAX_ROWS, DeltaStore, ensure_rows, unique
@@ -101,12 +101,14 @@ def load_documents(store, inbox, extract, frozen, data, run_id, queued_at, allow
         path, contents = inbox.read(doc_id)
         if sha256(contents).hexdigest() != doc_id:
             raise ValueError("Inbox content differs from frozen hash")
+        new_document = None
         if doc_id not in states:
-            new_documents.append({
+            new_document = {
                 "doc_id": doc_id, "content_sha256": doc_id, "file_path": path,
                 "received_at": timestamp, "run_id": run_id, "status": "received",
-            })
-        attempt = saved.get((doc_id,))
+            }
+        saved_attempt = saved.get((doc_id,))
+        attempt = saved_attempt
         if attempt is None:
             attempt = extract(contents, doc_id, run_id) | {"extracted_at": timestamp}
             if attempt["status"] in {"extracted", "needs_review"}:
@@ -124,10 +126,14 @@ def load_documents(store, inbox, extract, frozen, data, run_id, queued_at, allow
         if (attempt["doc_id"] != doc_id or attempt["run_id"] != run_id
                 or (attempt["extractor_name"], attempt["extractor_version"]) not in allowed_adapters):
             raise ValueError("Extractor returned inconsistent identity")
+        if new_document is not None:
+            ensure_rows(store, DOCUMENTS, [new_document], ("doc_id",))
+            new_documents.append(new_document)
+        if saved_attempt is None:
+            # Checkpoint quota-limited work before parsing the next PDF.
+            ensure_rows(store, EXTRACTIONS, [attempt], ("extraction_id",))
         failed |= attempt["status"] == "failed"
         attempts.append(attempt)
-    ensure_rows(store, DOCUMENTS, new_documents, ("doc_id",))
-    ensure_rows(store, EXTRACTIONS, attempts, ("extraction_id",))
     if failed:
         raise ValueError("Digital extraction failed")
     return (
@@ -202,7 +208,14 @@ def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigge
     try:
         event("running")
         if frozen["configuration"] != configuration:
-            raise ValueError("Frozen processor configuration is unavailable")
+            # A repair of an invocation queued before raster extraction was enabled
+            # continues with the original digital-only configuration.
+            primary = extract.stages[0] if isinstance(extract, ExtractorPlan) else None
+            if (primary is None or primary.name != "pypdf"
+                    or frozen["configuration"] != [PROCESSING_REVISION, primary.name, primary.version]):
+                raise ValueError("Frozen processor configuration is unavailable")
+            extract = primary.extract
+            allowed_adapters = {(primary.name, primary.version)}
         data = read_frozen(store, frozen)
         if not frozen["documents"] and not data[DOCUMENTS]:
             raise ValueError("No received synthetic documents")
@@ -232,15 +245,11 @@ def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigge
     return run_id
 
 
-def run(spark, catalog, job_run_id, trigger, *, extractor_plan=None):
-    from pypdf import __version__
-    from ..extraction import extract_digital_pdf
-
+def run(spark, catalog, job_run_id, trigger):
     store = DeltaStore(spark, catalog, readable=INPUTS, writable=WRITES)
     try:
-        return publish(store, Inbox(catalog), extractor_plan or extract_digital_pdf,
-                       extractor_version=__version__, job_run_id=job_run_id,
-                       trigger_type=TRIGGER_TYPES[trigger])
+        return publish(store, Inbox(catalog), managed_extractor_plan(spark),
+                       job_run_id=job_run_id, trigger_type=TRIGGER_TYPES[trigger])
     except Exception as error:
         # Connector exception messages can include input values. Report the error class only.
         error_class = getattr(error, "getErrorClass", lambda: None)() or type(error).__name__

@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from io import BytesIO
 import json
 
 
@@ -12,6 +13,7 @@ class Stage:
     extract: Callable[[bytes, str, str], dict]
     fallback_on: frozenset[str] = frozenset()
     require_confidence: bool = False
+    fallback_check: Callable[[bytes], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -30,7 +32,8 @@ class ExtractorPlan:
         """Return the ordered configuration for the Processing input digest."""
         return [
             self.minimum_confidence,
-            [[stage.name, stage.version, sorted(stage.fallback_on), stage.require_confidence]
+            [[stage.name, stage.version, sorted(stage.fallback_on), stage.require_confidence,
+              stage.fallback_check is not None]
              for stage in self.stages],
         ]
 
@@ -42,7 +45,10 @@ class ExtractorPlan:
                 raise ValueError("Adapter returned an inconsistent extraction identity")
             status = attempt["status"]
             if status == "failed":
-                if index + 1 < len(self.stages) and attempt["error_code"] in stage.fallback_on:
+                if (
+                    index + 1 < len(self.stages) and attempt["error_code"] in stage.fallback_on
+                    and (stage.fallback_check is None or stage.fallback_check(contents))
+                ):
                     continue
                 return attempt
             if status not in {"extracted", "needs_review"}:
@@ -65,12 +71,25 @@ class ExtractorPlan:
         return needs_review
 
 
+def has_raster_pages(contents):
+    """Check for page images after the digital adapter found no text layer."""
+    from pypdf import PdfReader
+    from pypdf.errors import PyPdfError
+
+    try:
+        reader = PdfReader(BytesIO(contents), strict=True)
+        return bool(reader.pages) and all(page.images.keys() for page in reader.pages)
+    except (PyPdfError, ValueError, TypeError, KeyError, IndexError, RecursionError):
+        return False
+
+
 def managed_extractor_plan(spark):
     """Use the merged digital adapter, then managed parsing for raster PDFs."""
     from pypdf import __version__
     from ..extraction import AiParseDocumentExtractor, extract_digital_pdf
 
     return ExtractorPlan((
-        Stage("pypdf", __version__, extract_digital_pdf, frozenset({"no_text_layer"})),
+        Stage("pypdf", __version__, extract_digital_pdf, frozenset({"no_text_layer"}),
+              fallback_check=has_raster_pages),
         Stage("ai_parse_document", "1", AiParseDocumentExtractor(spark), require_confidence=True),
     ), minimum_confidence=0.8)

@@ -5,6 +5,14 @@ import json
 import re
 
 
+LINEAGE_COLUMNS = (
+    "output_field", "extractor_name", "extractor_version", "decision_id", "doc_id",
+    "field_id", "extraction_id", "gold_row_id", "model_name", "model_version",
+)
+LINEAGE_IDENTIFIERS = ("decision_id", "doc_id", "field_id", "extraction_id", "gold_row_id")
+AMOUNT_FIELDS = {"wages", "other_income", "mortgage_interest"}
+
+
 @dataclass(frozen=True)
 class Lineage:
     gold_row_id: str
@@ -24,13 +32,36 @@ class GoldValue:
     gold_row_id: str
     output_field: str
     output_value: str | None
-    context: str | None = None
+    source: str | None
+    person_key: str | None
+    tax_year: str | None
 
     @property
     def label(self):
         value = self.output_value if self.output_value is not None else "—"
-        context = self.context or self.gold_row_id[:12]
-        return f"{self.output_field} · {value} · {context}"
+        return " · ".join(part for part in (self.output_field, value, self.source, self.person_key, self.tax_year)
+                          if part is not None)
+
+
+def default_gold_value_index(values):
+    return next((index for index, value in enumerate(values)
+                 if value.output_field in AMOUNT_FIELDS and value.output_value is not None), 0)
+
+
+def lineage_display(rows):
+    display = []
+    full_identifiers = []
+    for link in rows:
+        row = {column: getattr(link, column) for column in LINEAGE_COLUMNS}
+        full = {}
+        for column in LINEAGE_IDENTIFIERS:
+            identifier = row[column]
+            if identifier and len(identifier) > 12:
+                full[column] = identifier
+                row[column] = identifier[:12]
+        display.append(row)
+        full_identifiers.append(full)
+    return display, full_identifiers
 
 
 @dataclass(frozen=True)

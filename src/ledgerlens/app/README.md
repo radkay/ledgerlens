@@ -13,7 +13,7 @@ streamlit run src/ledgerlens/app/streamlit_app.py
 
 ## Streamlit Community Cloud
 
-Select `src/ledgerlens/app/community_cloud.py` as the entry point and Python 3.12 in Advanced settings. Community Cloud installs the adjacent `requirements.txt` from the app directory. The entry point always runs in public read-only mode. Fixture mode needs an empty Secrets editor. [Community Cloud dependency placement](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/app-dependencies)
+Select `src/ledgerlens/app/community_cloud.py` as the entry point and Python 3.14 in Advanced settings. The live public app runs Python 3.14 because its Python 3.12 deployment failed. Databricks Processing and Evaluation jobs run Python 3.12.3. Community Cloud installs the adjacent `requirements.txt` from the app directory. The entry point always runs in public read-only mode. Fixture mode needs an empty Secrets editor. [Community Cloud dependency placement](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/app-dependencies)
 
 To use published demo Gold, paste the [empty secrets template](.streamlit/secrets.toml.example) into Advanced settings. Set `LEDGERLENS_DATA_SOURCE` to `live`, `LEDGERLENS_ENVIRONMENT` to `demo`, and fill in the demo reader's host, client ID, client secret and existing warehouse ID there. For a local Cloud-entry smoke test, use an untracked `.streamlit/secrets.toml` in the repository root. [Community Cloud secrets](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management)
 
@@ -25,7 +25,7 @@ To enable the authenticated fixture workbench in Databricks Apps, configure app 
 
 ## Live data
 
-Keep the fixture source until a verified Gold publication exists. Set `LEDGERLENS_DATA_SOURCE=live`, explicitly select `LEDGERLENS_ENVIRONMENT` and supply the existing warehouse ID through `DATABRICKS_WAREHOUSE_ID`. No other environment is selected on failure. The dashboard shows accuracy as pending when the evaluator has yet to write rows for the pinned run. Confidence shows the distribution of released fields by form type from the pinned publication. The chart reports pending when the publication has no confidence rows. Historical reads require the provisioned Gold `published_*` views.
+Keep the fixture source until a verified Gold publication exists. Set `LEDGERLENS_DATA_SOURCE=live`, explicitly select `LEDGERLENS_ENVIRONMENT` and supply the existing warehouse ID through `DATABRICKS_WAREHOUSE_ID`. No other environment is selected on failure. The dashboard shows accuracy as pending when the evaluator has yet to write rows for the pinned run. Confidence shows the distribution of released fields by form type from the pinned publication. The chart reports pending when the publication has no confidence rows. Historical reads require the provisioned Gold `published_*` views. If a statement is still pending or running after the initial wait, the app shows a warehouse startup notice and polls within a two-minute statement deadline. [Databricks Statement Execution API](https://docs.databricks.com/api/statement-execution/v1/statement-execution)
 
 Databricks Apps provides the workspace URL and the managed app principal's OAuth credentials. That principal needs the contract's Gold reader grants on the selected catalog and explicit warehouse. [Databricks Apps runtime environment](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/system-env)
 

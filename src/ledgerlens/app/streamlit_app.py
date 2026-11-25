@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from functools import lru_cache
 from os import environ
 from pathlib import Path
@@ -59,6 +60,16 @@ def diagnostics(workspace):
                     st.text(call)
 
 
+@contextmanager
+def warehouse_wait():
+    notice = st.empty()
+    notice.info("Starting the Databricks warehouse; this can take up to two minutes after idle.")
+    try:
+        yield
+    finally:
+        notice.empty()
+
+
 def render(settings, *, public_only):
     environment = settings.get("LEDGERLENS_ENVIRONMENT")
     source = settings.get("LEDGERLENS_DATA_SOURCE", "fixture")
@@ -86,7 +97,7 @@ def render(settings, *, public_only):
         def reader_token():
             return workspace.reader_token(client_id, client_secret)
 
-        reader = GoldReader(Sql(workspace, warehouse, reader_token), environment)
+        reader = GoldReader(Sql(workspace, warehouse, reader_token, waiting=warehouse_wait), environment)
         if (apps_user_auth or public_only) and settings.get("LEDGERLENS_MODEL_ENDPOINT"):
             runtime_settings = {
                 "DATABRICKS_HOST": host,
@@ -97,7 +108,7 @@ def render(settings, *, public_only):
                 "LEDGERLENS_MODEL_ENDPOINT": settings["LEDGERLENS_MODEL_ENDPOINT"],
             }
         if identity:
-            delegated = Sql(workspace, warehouse, lambda: user_token)
+            delegated = Sql(workspace, warehouse, lambda: user_token, waiting=warehouse_wait)
             workbench = LiveWorkbench(delegated, environment, identity.actor_id)
             job_id = settings.get("LEDGERLENS_PROCESSING_JOB_ID")
             if job_id and job_id.isascii() and job_id.isdecimal() and int(job_id) > 0:

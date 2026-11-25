@@ -27,28 +27,28 @@ The Overview page shows the state of the pipeline.
 
 ## Published outputs
 
-The Published outputs page has three sections.
+The Published outputs page has three sections, in this order: Document coverage, Document lineage and Pre-filled form.
 
 ### Document coverage
 
 1. In **Person and tax year**, choose a synthetic person and year.
-2. The **expected forms** table lists each form that person should have for that year, and whether it was received and released or is still missing.
+2. The **Form / Status** table lists each form that person should have for that year, and whether it's **Present** or **Missing**.
 3. The **totals** table shows that person-year's published wages, other income and mortgage interest.
-
-### Pre-filled form
-
-1. In **Form**, choose a form, for example `W-2 · 2025 · fixture-person-001`.
-2. The table shows each published field and its value.
-3. Click **Download PDF** or **Download JSON** to get the pre-filled form. Both files carry the publication number and run ID, so you can always tell which run a downloaded form came from.
 
 ### Document lineage
 
 Lineage answers two questions, chosen with **Trace direction**:
 
-- **Gold value → document:** where did this published number come from?
-- **Document → output:** which published values did this document contribute to?
+- **Document → output** (the default): which published values did this document contribute to?
+- **Gold value → document:** where did this published value come from?
 
-Each row of the lineage table shows:
+The **Gold value** list contains every published value in the publication. Each entry reads `field · value · context`, for example:
+- `status · present · fixture-person-001 · 2025 · W-2`: a row from the expected-forms check.
+- `wages · 25000.00 · 17cd6db1d855`: a published amount. The last part is the start of the Gold row ID.
+
+The same amount can appear more than once, because it's published in more than one Gold output: the person-year total and the pre-filled form. Each appearance has its own Gold row, and both trace back to the same source field.
+
+The lineage table is wide. **Scroll it sideways** to see all of its columns:
 
 | Column | Meaning |
 |---|---|
@@ -56,22 +56,28 @@ Each row of the lineage table shows:
 | `doc_id` | The source document (identified by the SHA-256 of its PDF) |
 | `field_id` | The extracted field on that document |
 | `extraction_id` | The extraction attempt that produced the value |
-| `decision_id` | The reviewer decision that approved or corrected it. Blank when the field was auto-approved. |
-| `extractor_name`, `extractor_version` | The adapter that read the document: digital PDF text, or Databricks `ai_parse_document` for scanned pages |
-| `model_name`, `model_version` | The model behind the extractor, where one was used |
+| `decision_id` | The reviewer decision that approved or corrected it. Shows `None` when the field was auto-approved. |
+| `extractor_name`, `extractor_version` | The adapter that read the document, for example `pypdf 7.0.1` for digital PDFs, or Databricks `ai_parse_document` for scanned pages |
+| `model_name`, `model_version` | The model behind the extractor. Shows `None` for adapters that don't use a model. |
+
+### Pre-filled form
+
+1. In **Form**, choose a form, for example `W-2 · 2025 · fixture-person-001`.
+2. The table shows each published field and its value.
+3. Click **Download PDF** or **Download JSON** to get the pre-filled form. Both files carry the publication number and run ID, so you can always tell which run a downloaded form came from.
 
 ## How to test lineage
 
-**Trace a published value back to its document:**
-1. Open **Published outputs** and scroll to **Document lineage**.
-2. Choose **Gold value → document**.
-3. In **Gold value**, choose a value, for example `wages · <amount> · <person and year>`.
-4. Read the table. You should see exactly one source document and extraction for the value. If a reviewer touched the field, you'll also see a decision ID.
-
 **Trace a document forward to everything it produced:**
-1. Choose **Document → output**.
-2. In **Source document**, choose the `doc_id` you found above.
-3. The table lists every published output that document fed. It should include the value you started from.
+1. Open **Published outputs** and scroll to **Document lineage**. **Document → output** is selected by default.
+2. In **Source document**, keep or choose a document.
+3. The table lists every published output that document fed. For the demo W-2 you should see three rows: two `wages` rows (the person-year total and the pre-filled form) and one `status` row (the W-2 is present). All three share the same `doc_id` and `field_id`.
+
+**Trace a published value back to its document:**
+1. Choose **Gold value → document**. The first entry in **Gold value** is selected by default; it's usually a `status` row.
+2. In **Gold value**, choose a `wages` entry, for example `wages · 25000.00 · 17cd6db1d855`.
+3. Read the table, scrolling sideways. You should see one source document, one field and one extraction. `decision_id` shows `None` if the field was auto-approved, and `extractor_name` shows the adapter that read it, for example `pypdf`.
+4. Choose a `status · missing` entry. A missing form has no source document, so its lineage is empty. That's expected.
 
 **Cross-check against the pre-filled form:**
 1. In **Pre-filled form**, choose the same person, year and form.

@@ -205,7 +205,8 @@ class LiveWorkbench:
                 documents[key] = (extraction_id, utc_timestamp(state_at), status, [])
             if field_id is not None:
                 score = float(confidence) if confidence is not None else None
-                documents[key][3].append(Field(field_id, name, extracted, final, score).masked())
+                field = Field(field_id, name, extracted, final, score, catalog_masked=True)
+                documents[key][3].append(field.masked())
         return tuple(ReviewDocument(key, extraction, state_at, status, tuple(fields))
                      for key, (extraction, state_at, status, fields) in documents.items())
 

@@ -36,8 +36,8 @@ class GoldToolsTests(unittest.TestCase):
             self.assertEqual(set(re.findall(r":(\w+)", sql)), params.keys())
         self.assertEqual(objects, {
             f"ledgerlens_dev.gold.{view}" for view in (
-                "latest_publication", "current_person_year", "current_prefill",
-                "current_missing_documents", "current_lineage", "current_review_summary",
+                "latest_publication", "published_person_year", "published_prefill",
+                "published_missing_documents", "published_lineage", "published_review_summary",
                 "current_document_state",
             )
         })

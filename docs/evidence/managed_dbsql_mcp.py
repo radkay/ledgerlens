@@ -21,7 +21,7 @@ QUERY = """
 SELECT p.run_id
 FROM ledgerlens_dev.gold.latest_publication AS p
 WHERE EXISTS (
-    SELECT 1 FROM ledgerlens_dev.gold.current_lineage AS l WHERE l.run_id = p.run_id
+    SELECT 1 FROM ledgerlens_dev.gold.published_lineage AS l WHERE l.run_id = p.run_id
 )
 LIMIT 1
 """

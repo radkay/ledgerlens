@@ -45,6 +45,17 @@ class WorkbenchTests(unittest.TestCase):
             operator.append_decision(decision, before.state_at)
         self.assertEqual(operator.document(before.doc_id), before)
 
+    def test_only_catalog_last_four_tokens_survive_workbench_masking(self):
+        field = Field("id", "employee_ssn", "****1234", "****5678", None, catalog_masked=True)
+        self.assertEqual(field.masked().masked().extracted_value, "****1234")
+        self.assertEqual(field.masked().final_value, "****5678")
+        self.assertEqual(replace(field, catalog_masked=False).masked().extracted_value, "[masked]")
+        for value in (None, "000123456", "000-12-3456", "*****1234", "****12345",
+                      "****１２３４", "****1234 ", "****1234\n"):
+            with self.subTest(value=value):
+                masked = replace(field, extracted_value=value, final_value=value).masked()
+                self.assertEqual((masked.extracted_value, masked.final_value), ("[masked]", "[masked]"))
+
     def test_enforces_actor_reason_extraction_and_idempotent_append(self):
         operator = FixtureWorkbench("operator")
         document = NEEDS_REVIEW

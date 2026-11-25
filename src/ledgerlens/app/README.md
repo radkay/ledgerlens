@@ -39,3 +39,14 @@ Fixture mode traces the sample W-2 wages locally. The Databricks Apps deployment
 ## Fixture media capture
 
 From the repository root, use the locked Playwright environment and install its matching Chromium browser. Install the adjacent app requirements into the capture environment. Run `python src/ledgerlens/app/capture_media.py` to produce five PNG and GIF pairs under `docs/media/`. The script starts a loopback fixture server with a synthetic reviewer and makes no live requests. Use `--output` to select a different destination.
+
+### Hosted Runtime agent source
+
+Stage the hosted App from the repository root so the App source contains both the UI and the locked MCP package.
+
+```bash
+app_stage=$(mktemp -d)
+python3 scripts/stage_hosted_app.py "$app_stage/ledgerlens"
+```
+
+Upload that staged directory as the source for the existing Databricks App when the demo catalog and grants are ready. The stage uses the root MCP pin and the existing App dependencies. Enable the live Runtime agent through the documented hosted endpoint setting and grant the hosted reader identity access to the selected model. The Community Cloud entry point continues to use the App directory and its reader-only requirements.

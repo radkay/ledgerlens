@@ -48,21 +48,21 @@ class PublishedGold:
             WITH published_outputs AS (
                 SELECT gold_row_id, person_key, tax_year, CAST(NULL AS STRING) AS form_type,
                        output_field, CAST(output_value AS STRING) AS output_value
-                FROM {gold}.current_person_year
+                FROM {gold}.published_person_year
                 UNPIVOT EXCLUDE NULLS (output_value FOR output_field IN (wages, other_income, mortgage_interest))
                 WHERE run_id = :run_id
                 UNION ALL
                 SELECT gold_row_id, person_key, tax_year, form_type, output_field, output_value
-                FROM {gold}.current_prefill WHERE run_id = :run_id
+                FROM {gold}.published_prefill WHERE run_id = :run_id
                 UNION ALL
                 SELECT gold_row_id, person_key, tax_year, expected_form, 'status', status
-                FROM {gold}.current_missing_documents WHERE run_id = :run_id
+                FROM {gold}.published_missing_documents WHERE run_id = :run_id
             )
             SELECT o.gold_row_id, o.person_key, o.tax_year, o.form_type, o.output_field,
                    o.output_value, l.doc_id, l.field_id, l.extraction_id, l.decision_id,
                    l.extractor_name, l.extractor_version, l.model_name, l.model_version
             FROM published_outputs AS o
-            LEFT JOIN {gold}.current_lineage AS l
+            LEFT JOIN {gold}.published_lineage AS l
               ON l.run_id = :run_id AND l.gold_row_id = o.gold_row_id AND l.output_field = o.output_field
             WHERE (:gold_row_id = '' OR o.gold_row_id = :gold_row_id)
               AND (:output_field = '' OR o.output_field = :output_field)
@@ -84,7 +84,7 @@ class PublishedGold:
         """Read the published count and the separate live list of documents needing review."""
         gold = self._tools._gold
         summary = self._tools._query(f"""
-            SELECT document_count FROM {gold}.current_review_summary
+            SELECT document_count FROM {gold}.published_review_summary
             WHERE run_id = :run_id AND status = :status
             LIMIT 1
         """, {"run_id": self.run_id, "status": "needs_review"}, row_limit=1)

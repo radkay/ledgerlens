@@ -2,6 +2,10 @@
 
 The Runtime agent requires `LEDGERLENS_MODEL_ENDPOINT=databricks-gpt-oss-20b`. Ron selected the hosted endpoint called by the November 23 capability probe. The original notebook and output are pending in [#12](https://github.com/radkay/ledgerlens/issues/12). The Runtime agent implementation has a credential-free synthetic transcript test. The dev reader invocation is pending.
 
+## Approved public app behavior
+
+The public Runtime agent will answer preset questions against a pinned Gold publication. Each answer is cached for its preset and publication, so repeat selections reuse that answer. A daily cap bounds live generation. The MCP lane owns implementation and live verification of this public behavior. [Decision D-026](../DECISIONS.md)
+
 ## Custom MCP smoke
 
 The custom server offers `trace_value` and `documents_needing_review` over MCP stdio. The Runtime agent connects to the same server in process and resolves one publication for the question. The tools accept domain parameters. The server binds them to fixed SQL statements over Gold serving views. The review tool returns a run-stamped publication count and a separate live document list. Both paths cap responses at 25 rows and report truncation.

@@ -133,6 +133,8 @@ Keep the demo deployer secret in GitHub Actions and the demo reader secret in Co
 
 Open the public app in a fresh private window signed out of GitHub, Streamlit, and Databricks. Confirm it loads published demo Gold without a sign-in prompt. Open published outputs, confirm run-pinned totals and missing-form status, drill into reverse lineage, and download a pre-filled synthetic form. Confirm the workbench, batch controls, private previews, and raw or evaluation data are unavailable on that public surface. Test authenticated reviewer actions separately in the designated review environment before capturing the workbench GIF.
 
+When the MCP lane has enabled the public Runtime agent, verify from the signed-out browser that its questions are preset and its answers use the selected publication. Repeat a preset on the same publication to verify cache reuse. Check the MCP lane's daily-cap verification evidence before describing the live feature in the release notes.
+
 ## 6. Finalize links and evidence
 
 Replace the four `{{RELEASE:...}}` entries in [README.md](../README.md) with the verified public app URL, the demo Actions URL, and the two synthetic walkthrough GIF links. Refresh the build metrics with `python3 scripts/build_metrics.py --update-readme` and run `python3 scripts/release_readiness.py` to list any placeholders still open. Submit documentation updates to `dev` through a PR and use the same release flow to publish them on `main`.

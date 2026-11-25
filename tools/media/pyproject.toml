@@ -1,0 +1,15 @@
+[project]
+name = "ledgerlens-media"
+version = "0.1.0"
+requires-python = ">=3.12.3,<3.13"
+dependencies = [
+    "playwright==1.65.2",
+    "reportlab==4.5.1",
+    "requests==2.34.2",
+    "streamlit==1.52.2",
+    "streamlit-pdf==2.1.0",
+]
+
+[tool.uv]
+required-version = "==0.9.18"
+package = false

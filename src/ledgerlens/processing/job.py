@@ -9,7 +9,8 @@ from pathlib import Path
 from .adapters import ExtractorPlan, managed_extractor_plan
 from .replay import canonical_decisions, classify, fingerprint, replay
 from .snapshot import (
-    GRAINS, MetadataError, build_snapshot, metadata, silver_projection, validate_gold_lineage,
+    GRAINS, MetadataError, build_snapshot, metadata, silver_projection, validate_confidence_summary,
+    validate_gold_lineage,
 )
 from .storage import MAX_ROWS, DeltaStore, ensure_rows, unique
 
@@ -25,7 +26,7 @@ INPUTS = (INVENTORY, REASONS, DECISIONS, DOCUMENTS, EXTRACTIONS, PUBLICATIONS, R
 WRITES = (DOCUMENTS, EXTRACTIONS, RUNS, PUBLICATIONS, *GRAINS)
 TRIGGER_TYPES = {"one_time": "manual", "periodic": "scheduled"}
 PDF = re.compile(r"([a-f0-9]{64})\.pdf")
-PROCESSING_REVISION = 1
+PROCESSING_REVISION = 2
 
 
 class Inbox:
@@ -213,12 +214,15 @@ def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigge
     phase = "frozen_inputs"
     try:
         event("running")
-        if frozen["configuration"] != configuration:
+        compatible = (configuration, [1, *configuration[1:]])
+        if frozen["configuration"] not in compatible:
             # A repair of an invocation queued before raster extraction was enabled
             # continues with the original digital-only configuration.
             primary = extract.stages[0] if isinstance(extract, ExtractorPlan) else None
             if (primary is None or primary.name != "pypdf"
-                    or frozen["configuration"] != [PROCESSING_REVISION, primary.name, primary.version]):
+                    or frozen["configuration"] not in (
+                        [1, primary.name, primary.version], [PROCESSING_REVISION, primary.name, primary.version],
+                    )):
                 raise ValueError("Frozen processor configuration is unavailable")
             extract = primary.extract
             allowed_adapters = {(primary.name, primary.version)}
@@ -232,6 +236,7 @@ def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigge
         phase = "snapshot_validation"
         tables = build_snapshot(run_id, states, inventory)
         validate_gold_lineage(tables, inventory)
+        validate_confidence_summary(tables)
         for table, rows in tables.items():
             projection = {"silver.fields": silver_projection}.get(table)
             options = {"projection": projection} if projection else {}

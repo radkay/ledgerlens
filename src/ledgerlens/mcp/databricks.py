@@ -14,6 +14,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from .gold import CATALOGS, FETCH_LIMIT
 
 HOSTED_ENDPOINT = "databricks-gpt-oss-20b"
+GATEWAY_MODEL_SERVICE = "system.ai.gpt-oss-20b"
 RESPONSE_LIMIT = 1_048_576
 
 
@@ -71,10 +72,15 @@ class RuntimeConfig:
 class DatabricksError(OSError):
     """A workspace request failed without exposing request headers or response data."""
 
+    def __init__(self, message, *, status=None, code=None):
+        super().__init__(message)
+        self.status = status
+        self.code = code
 
-def _error_code(payload) -> str:
+
+def _error_code(payload) -> str | None:
     code = payload.get("error_code") if isinstance(payload, dict) else None
-    return f", {code}" if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{1,79}", code) else ""
+    return code if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{1,79}", code) else None
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -99,7 +105,10 @@ def _post(url: str, headers: dict, body: bytes, *, timeout: int) -> dict:
             except (ValueError, OSError):
                 failure = {}
         code = _error_code(failure)
-        raise DatabricksError(f"Databricks request failed (HTTP {error.code}{code}).") from None
+        detail = f", {code}" if code else ""
+        raise DatabricksError(
+            f"Databricks request failed (HTTP {error.code}{detail}).", status=error.code, code=code,
+        ) from None
     except (URLError, TimeoutError, ValueError):
         raise DatabricksError("Databricks request failed or returned an invalid response.") from None
     if not isinstance(payload, dict):
@@ -168,7 +177,8 @@ class ReaderWorkspace:
         status = response.get("status", {})
         if status.get("state") != "SUCCEEDED":
             code = _error_code(status.get("error", {}))
-            raise DatabricksError(f"The bounded Gold statement did not succeed (SQL{code}).")
+            detail = f", {code}" if code else ""
+            raise DatabricksError(f"The bounded Gold statement did not succeed (SQL{detail}).", code=code)
         result = response.get("result", {})
         manifest = response.get("manifest", {})
         rows = result.get("data_array", [])
@@ -183,3 +193,12 @@ class ReaderWorkspace:
         if endpoint != HOSTED_ENDPOINT:
             raise ValueError("The configured model endpoint is unsupported.")
         return self._request(f"/serving-endpoints/{endpoint}/invocations", payload, timeout=45)
+
+    def chat_gateway(self, endpoint: str, payload: dict) -> dict:
+        if endpoint != HOSTED_ENDPOINT:
+            raise ValueError("The configured model endpoint is unsupported.")
+        return self._request(
+            "/ai-gateway/mlflow/v1/chat/completions",
+            {**payload, "model": GATEWAY_MODEL_SERVICE},
+            timeout=45,
+        )

@@ -2,7 +2,9 @@ import json
 import sys
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from contextlib import redirect_stderr
+from datetime import UTC, date, datetime
+from io import StringIO
 from pathlib import Path
 from threading import Barrier
 from unittest.mock import MagicMock, Mock, patch
@@ -72,9 +74,22 @@ class PublicRuntimeTests(unittest.TestCase):
     def test_daily_model_cap_resets_without_replaying_completed_pairs(self):
         today = Mock(return_value=date(2026, 11, 25))
         runtime = panel.PublicRuntime(daily_limit=1, today=today)
-        first = runtime.answer(self.config, panel.PRESETS[0])
-        self.assertIsNone(runtime.answer(self.config, panel.PRESETS[1]).answer)
-        self.assertEqual(runtime.answer(self.config, panel.PRESETS[0]), first)
+        with redirect_stderr(StringIO()) as stderr:
+            first = runtime.answer(self.config, panel.PRESETS[0])
+            self.assertIsNone(runtime.answer(self.config, panel.PRESETS[1]).answer)
+            self.assertEqual(runtime.answer(self.config, panel.PRESETS[0]), first)
+        lines = stderr.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        event = json.loads(lines[0])
+        self.assertEqual(datetime.fromisoformat(event.pop("time_utc")).tzinfo, UTC)
+        self.assertEqual(event, {
+            "event": "public_runtime_preset_unavailable",
+            "question": panel.PRESETS[1].question,
+            "run_id": self.run_id,
+            "status": "daily_cap",
+            "code": "DAILY_CAP",
+            "http_status": None,
+        })
         self.chat.assert_called_once()
 
         today.return_value = date(2026, 11, 26)
@@ -90,14 +105,27 @@ class PublicRuntimeTests(unittest.TestCase):
                                          answer_text("Published other income.")]
                 today = Mock(return_value=date(2026, 11, 25))
                 runtime = panel.PublicRuntime(today=today)
-                failed = runtime.answer(self.config, panel.PRESETS[0])
-                self.assertFalse(failed.answer.grounded)
-                self.assertNotIn("provider details", failed.answer.text)
-                self.assertIsNone(runtime.answer(self.config, panel.PRESETS[1]).answer)
+                with redirect_stderr(StringIO()) as stderr:
+                    failed = runtime.answer(self.config, panel.PRESETS[0])
+                    self.assertFalse(failed.answer.grounded)
+                    self.assertNotIn("provider details", failed.answer.text)
+                    self.assertIsNone(runtime.answer(self.config, panel.PRESETS[1]).answer)
+                    self.assertEqual(runtime.answer(self.config, panel.PRESETS[0]), failed)
+                raw = stderr.getvalue()
+                self.assertNotIn("provider details", raw)
+                self.assertNotIn(failed.answer.text, raw)
+                self.assertNotIn(self.config.reader.client_secret, raw)
+                events = [json.loads(line) for line in raw.splitlines()]
+                self.assertEqual([event["status"] for event in events], ["model_failed", "blocked", "cached_failure"])
+                self.assertEqual([event["run_id"] for event in events], [self.run_id] * 3)
+                self.assertEqual(events[0]["http_status"], status)
+                self.assertEqual(events[0]["code"], code or "MODEL_FAILED")
                 self.chat.assert_called_once()
                 today.return_value = date(2026, 11, 26)
-                self.assertEqual(runtime.answer(self.config, panel.PRESETS[0]), failed)
-                self.assertTrue(runtime.answer(self.config, panel.PRESETS[1]).answer.grounded)
+                with redirect_stderr(StringIO()) as stderr:
+                    self.assertEqual(runtime.answer(self.config, panel.PRESETS[0]), failed)
+                    self.assertTrue(runtime.answer(self.config, panel.PRESETS[1]).answer.grounded)
+                self.assertEqual(json.loads(stderr.getvalue())["status"], "cached_failure")
                 self.assertEqual(self.chat.call_count, 2)
 
     def test_unlisted_questions_and_other_catalogs_do_not_reach_reader(self):
@@ -140,7 +168,22 @@ class PublicRuntimeTests(unittest.TestCase):
             "DATABRICKS_WAREHOUSE_ID": "a" * 16, "DATABRICKS_READER_CLIENT_ID": "demo-reader",
             "DATABRICKS_READER_CLIENT_SECRET": "synthetic-secret", "LEDGERLENS_MODEL_ENDPOINT": self.config.endpoint,
         }
-        with patch.object(panel, "st", st), patch.object(panel, "_PUBLIC_RUNTIME", panel.PublicRuntime(daily_limit=0)):
+        with (
+            patch.object(panel, "st", st),
+            patch.object(panel, "_PUBLIC_RUNTIME", panel.PublicRuntime(daily_limit=0)),
+            redirect_stderr(StringIO()),
+        ):
             panel.show_public_runtime(settings)
         st.info.assert_called_once_with(panel.UNAVAILABLE)
+        self.chat.assert_not_called()
+
+    def test_publication_failure_has_no_run_id_or_exception_text(self):
+        self.read.side_effect = DatabricksError("private error details", status=403, code="PERMISSION_DENIED")
+        with redirect_stderr(StringIO()) as stderr, self.assertRaises(DatabricksError):
+            self.runtime.answer(self.config, panel.PRESETS[0])
+        self.assertNotIn("private error details", stderr.getvalue())
+        event = json.loads(stderr.getvalue())
+        self.assertIsNone(event["run_id"])
+        self.assertEqual(event["status"], "publication_failed")
+        self.assertEqual(event["code"], "PERMISSION_DENIED")
         self.chat.assert_not_called()

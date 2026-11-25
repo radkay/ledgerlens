@@ -34,7 +34,13 @@ For live Databricks Apps operator actions, enable the user authorization scopes 
 
 ## Runtime agent
 
-Fixture mode traces the sample W-2 wages locally. The Databricks Apps deployment needs the Runtime agent package staged alongside the app, the locked MCP dependency, and an explicit `LEDGERLENS_MODEL_ENDPOINT` to call the live panel. It uses the app's existing Gold reader credentials. Community Cloud keeps the live model panel unavailable.
+The Databricks Apps fixture traces the sample W-2 wages locally. The hosted deployment needs the staged Runtime agent package, the locked MCP dependency, and an explicit `LEDGERLENS_MODEL_ENDPOINT`. It uses the app's existing Gold reader credentials.
+
+### Community Cloud operations
+
+- Set `LEDGERLENS_MODEL_ENDPOINT=databricks-gpt-oss-20b` in the live demo app's Secrets editor. After each deploy, open **Runtime agent** and click all four presets once to warm the cache for the current publication.
+- Open **Manage app** to see a single stderr record for each failed preset selection or request blocked by the daily cap or a provider error. The record includes UTC time, the preset question, the publication run ID when available, and a status and code. [Community Cloud logs](https://docs.streamlit.io/deploy/streamlit-community-cloud/manage-your-app#cloud-logs)
+- To clear a cached failed answer, select **Manage app → ⋮ → Reboot app** and confirm. Rebooting clears the process cache and briefly interrupts active sessions. Warm the four presets again after the app comes back up. [Reboot your app](https://docs.streamlit.io/deploy/streamlit-community-cloud/manage-your-app/reboot-your-app)
 
 ## Fixture media capture
 

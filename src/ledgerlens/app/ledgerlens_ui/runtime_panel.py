@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import json
+import re
+import sys
 from threading import Lock
 from typing import TYPE_CHECKING
 
@@ -11,10 +14,11 @@ import streamlit as st
 
 if TYPE_CHECKING:
     from ledgerlens.mcp.agent import Answer
-    from ledgerlens.mcp.databricks import RuntimeConfig
+    from ledgerlens.mcp.databricks import DatabricksError, RuntimeConfig
 
 DAILY_MODEL_CALL_LIMIT = 12
 UNAVAILABLE = "The Runtime agent is temporarily unavailable."
+PRESET_ERRORS = (OSError, LookupError, RuntimeError, ValueError, ExceptionGroup)
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,24 @@ class PublicReply:
 
 def _utc_day():
     return datetime.now(UTC).date()
+
+
+def _log_preset_failure(
+    preset: Preset, run_id: str | None, status: str, error: DatabricksError | None = None,
+) -> None:
+    code = error.code if error else None
+    http_status = error.status if error else None
+    event = {
+        "event": "public_runtime_preset_unavailable",
+        "time_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+        "question": preset.question,
+        "run_id": run_id if isinstance(run_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", run_id) else None,
+        "status": status,
+        "code": code if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{1,79}", code) else status.upper(),
+        "http_status": http_status if type(http_status) is int and 100 <= http_status <= 599 else None,
+    }
+    sys.stderr.write(json.dumps(event) + "\n")
+    sys.stderr.flush()
 
 
 class PublicRuntime:
@@ -67,19 +89,33 @@ class PublicRuntime:
 
         if preset not in PRESETS or config.reader.catalog != "ledgerlens_demo":
             raise ValueError("Use a public preset with the demo reader.")
-        workspace = ReaderWorkspace(config.reader)
-        publication = GoldTools(config.reader.catalog, workspace.read).pin()
+        try:
+            workspace = ReaderWorkspace(config.reader)
+            publication = GoldTools(config.reader.catalog, workspace.read).pin()
+        except PRESET_ERRORS as error:
+            _log_preset_failure(
+                preset, None, "publication_failed", error if isinstance(error, DatabricksError) else None,
+            )
+            raise
         key = (publication.run_id, preset.question)
 
         # Serialize misses so concurrent sessions cannot repeat a model request or exceed the cap.
         with self._lock:
             if key in self._answers:
-                return self._answers[key]
+                reply = self._answers[key]
+                if reply.answer is None or not reply.answer.grounded:
+                    _log_preset_failure(preset, publication.run_id, "cached_failure")
+                return reply
             self._reset_budget_for_today()
             if self._blocked or self._calls >= self._daily_limit:
+                status = "blocked" if self._blocked else "daily_cap"
+                _log_preset_failure(preset, publication.run_id, status)
                 return PublicReply(publication.run_id, None)
 
+            model_error = None
+
             def complete(payload):
+                nonlocal model_error
                 self._reset_budget_for_today()
                 self._calls += 1
                 # Reserve this pair before sending the request, even if its outcome is unknown.
@@ -87,6 +123,7 @@ class PublicRuntime:
                 try:
                     return workspace.chat_gateway(config.endpoint, payload)
                 except DatabricksError as error:
+                    model_error = error
                     code = error.code or ""
                     if (
                         error.status in {401, 403, 429, 503}
@@ -96,7 +133,16 @@ class PublicRuntime:
                         self._blocked = True
                     raise
 
-            answer = answer_preset(preset.question, publication, preset.output_field, complete)
+            try:
+                answer = answer_preset(preset.question, publication, preset.output_field, complete)
+            except PRESET_ERRORS as error:
+                _log_preset_failure(
+                    preset, publication.run_id, "preset_failed", error if isinstance(error, DatabricksError) else None,
+                )
+                raise
+            if not answer.grounded:
+                status = "model_failed" if key in self._answers else "tool_failed"
+                _log_preset_failure(preset, publication.run_id, status, model_error)
             reply = PublicReply(publication.run_id, answer)
             if key in self._answers:
                 self._answers[key] = reply
@@ -128,7 +174,7 @@ def show_public_runtime(settings):
             try:
                 with st.spinner("Reading published Gold"):
                     reply = _PUBLIC_RUNTIME.answer(config, preset)
-            except (OSError, LookupError, RuntimeError, ValueError, ExceptionGroup):
+            except PRESET_ERRORS:
                 st.info(UNAVAILABLE)
                 return
             st.session_state[state_key] = (scope, reply)

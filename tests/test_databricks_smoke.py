@@ -15,8 +15,8 @@ class TaskErrorTests(TestCase):
             "error": "RuntimeError: Processing job failed (PERMISSION_DENIED)\nsynthetic private fixture"
         })
 
-        self.assertEqual(task_error(api, run), "Processing job failed (PERMISSION_DENIED)")
-        api.assert_called_once_with("/api/2.1/jobs/runs/get-output?run_id=456")
+        self.assertEqual(task_error(api, run), "task run 456, Processing job failed (PERMISSION_DENIED)")
+        api.assert_called_once_with("/api/2.2/jobs/runs/get-output?run_id=456")
 
     def test_falls_back_to_a_bounded_task_status_when_output_is_unavailable(self):
         run = {"tasks": [{"run_id": 456, "state": {
@@ -26,11 +26,20 @@ class TaskErrorTests(TestCase):
 
         self.assertEqual(
             task_error(Mock(side_effect=URLError("unavailable")), run),
-            "AnalysisException: [TABLE_OR_VIEW_NOT_FOUND]",
+            "task run 456, task output unavailable, AnalysisException: [TABLE_OR_VIEW_NOT_FOUND]",
         )
 
     def test_keeps_unrecognized_task_output_out_of_logs(self):
         run = {"tasks": [{"run_id": 456, "state": {"result_state": "FAILED"}}]}
         api = Mock(return_value={"error": "synthetic raw output [SYNTHETIC_TOKEN]"})
 
-        self.assertEqual(task_error(api, run), "")
+        self.assertEqual(task_error(api, run), "task run 456")
+
+    def test_reads_python_task_logs_and_keeps_the_termination_code(self):
+        run = {"tasks": [{"run_id": 456, "status": {"termination_details": {"code": "DRIVER_ERROR"}}}]}
+        api = Mock(return_value={"logs": "ModuleNotFoundError: No module named 'ledgerlens'\nsynthetic trace"})
+
+        self.assertEqual(
+            task_error(api, run),
+            "task run 456, DRIVER_ERROR, ModuleNotFoundError: No module named 'ledgerlens'",
+        )

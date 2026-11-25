@@ -13,7 +13,9 @@ from urllib.request import Request, urlopen
 TASK_ERROR = re.compile(
     r"(?:Processing|Evaluation) job failed \([A-Za-z_][A-Za-z0-9_.]{0,79}\)"
     r"|ModuleNotFoundError: No module named '[A-Za-z_][A-Za-z0-9_.]{0,79}'"
-    r"|(?:AnalysisException|SparkRuntimeException):\s*\[[A-Z][A-Z0-9_.]{2,79}\]"
+    r"|Expected Python 3\.12\.3, found [0-9.]{3,20}"
+    r"|(?:AnalysisException|SparkRuntimeException|SparkConnectGrpcException|PySparkRuntimeError)"
+    r":\s*\[[A-Z][A-Z0-9_.]{2,79}\]"
 )
 
 
@@ -30,16 +32,27 @@ def task_error(api, run):
     task_run_id = failed_task.get("run_id")
     if type(task_run_id) is not int or task_run_id <= 0:
         return ""
+    details = [f"task run {task_run_id}"]
+    status_code = failed_task.get("status", {}).get("termination_details", {}).get("code", "")
+    if isinstance(status_code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{1,79}", status_code):
+        details.append(status_code)
+    output = {}
     try:
-        output = api(f"/api/2.1/jobs/runs/get-output?run_id={task_run_id}")
+        output = api(f"/api/2.2/jobs/runs/get-output?run_id={task_run_id}")
+    except HTTPError as error:
+        details.append(f"task output HTTP {error.code}")
     except (OSError, ValueError):
-        output = {}
+        details.append("task output unavailable")
     # Connector errors may contain data. Log only bounded exception classes and error codes.
-    messages = (output.get("error"), output.get("error_trace"), failed_task.get("state", {}).get("state_message"))
+    messages = (
+        output.get("error"), output.get("error_trace"), output.get("logs"),
+        failed_task.get("state", {}).get("state_message"),
+    )
     for message in messages:
         if isinstance(message, str) and (match := TASK_ERROR.search(message)):
-            return match.group()
-    return ""
+            details.append(match.group())
+            break
+    return ", ".join(details)
 
 
 def main():
@@ -82,7 +95,7 @@ def main():
         run_id = api("/api/2.1/jobs/run-now", {"job_id": job_id})["run_id"]
         print(f"{role} job started (Databricks run {run_id})", flush=True)
         run = wait_for(
-            lambda: api(f"/api/2.1/jobs/runs/get?run_id={run_id}"),
+            lambda: api(f"/api/2.2/jobs/runs/get?run_id={run_id}"),
             lambda item: item["state"]["life_cycle_state"] in {"TERMINATED", "SKIPPED", "INTERNAL_ERROR"},
         )
         state = run["state"].get("result_state") or run["state"]["life_cycle_state"]

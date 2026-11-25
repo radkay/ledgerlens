@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from ledgerlens.processing.job import (
     DECISIONS, DOCUMENTS, EXTRACTIONS, INVENTORY, PUBLICATIONS, REASONS, RELEASES, RUNS, publish,
 )
+from ledgerlens.processing.lineage import trace_wages
 from ledgerlens.processing.replay import ACTIONS, field_id
 from ledgerlens.processing.snapshot import silver_projection
 
@@ -276,6 +277,45 @@ class ProcessingTests(unittest.TestCase):
         self.decision("correct_field", extraction=new["extraction_id"], value="2.00")
         released = self.run_job("5")
         self.assertEqual(self.trace_wages(released)[0], Decimal("2.00"))
+
+    def test_reverse_lineage_resolves_original_wage_and_applicable_correction(self):
+        self.wages = "unreadable"
+        self.run_job("1")
+        attempt, = self.store.read(EXTRACTIONS)
+        correction = self.decision("correct_field", extraction=attempt["extraction_id"],
+                                   value="123.45")
+        corrected_run = self.run_job("2")
+        output, = self.store.serving("gold.person_year")
+        gold_row_id = output["gold_row_id"]
+        trace = trace_wages(self.store, corrected_run, gold_row_id)
+        source, = trace["sources"]
+        self.assertEqual(trace["wages"], Decimal("123.45"))
+        self.assertEqual(
+            (source["doc_id"], source["field_id"], source["extraction_id"], source["decision_id"]),
+            (DOC, WAGES, attempt["extraction_id"], correction["decision_id"]),
+        )
+        self.assertEqual((source["original_value"], source["final_wage"]),
+                         ("unreadable", Decimal("123.45")))
+
+        self.decision("recall")
+        self.store.failure = PUBLICATIONS
+        with self.assertRaisesRegex(RuntimeError, "interrupted append"):
+            self.run_job("3")
+        with self.assertRaisesRegex(ValueError, "no publication"):
+            trace_wages(self.store, self.store.read(RUNS)[-1]["run_id"], gold_row_id)
+        self.run_job("3")
+        self.assertEqual(trace_wages(self.store, corrected_run, gold_row_id), trace)
+        self.assertEqual(self.store.serving("gold.person_year"), [])
+
+        self.store.append(DECISIONS, [correction | {"corrected_value": "1.00"}])
+        self.assertEqual(trace_wages(self.store, corrected_run, gold_row_id), trace)
+
+        # Simulate a corrupted lineage ledger at the published Gold grain.
+        self.store.history["gold.lineage"][-1] = [
+            row for row in self.store.read("gold.lineage") if row["gold_row_id"] != gold_row_id
+        ]
+        with self.assertRaisesRegex(ValueError, "does not cover"):
+            trace_wages(self.store, corrected_run, gold_row_id)
 
     def test_actionable_decision_requires_registered_reason(self):
         self.wages = "unreadable"

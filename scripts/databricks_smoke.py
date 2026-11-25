@@ -55,6 +55,26 @@ def task_error(api, run):
     return ", ".join(details)
 
 
+def verify_permission_denial(table, status):
+    state = status["state"]
+    error = status.get("error", {})
+    code = error.get("error_code")
+    sql_state = error.get("sql_state")
+    # Report structured fields only. SQL error messages can include sensitive data.
+    details = [f"state={state}"]
+    if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{1,79}", code):
+        details.append(f"error_code={code}")
+    if isinstance(sql_state, str) and re.fullmatch(r"[A-Z0-9]{5}", sql_state):
+        details.append(f"sql_state={sql_state}")
+    summary = ", ".join(details)
+    if state == "FAILED" and (
+        sql_state == "42501" or code in ("PERMISSION_DENIED", "INSUFFICIENT_PERMISSIONS")
+    ):
+        print(f"Permission denial confirmed for {table} ({summary})", flush=True)
+        return
+    raise RuntimeError(f"Expected an explicit permission denial for {table} ({summary})")
+
+
 def main():
     host = os.environ["DATABRICKS_HOST"].rstrip("/")
     parsed = urlsplit(host)
@@ -156,11 +176,7 @@ def main():
         raise RuntimeError("Expected valid digital W-2 accuracy for the processing invocation")
     for table in ("silver.fields", "eval.answer_key"):
         result = sql(f"SELECT 1 FROM {catalog}.{table} LIMIT 1")
-        error = result["status"].get("error", {})
-        if result["status"]["state"] != "FAILED" or error.get("error_code") not in {
-            "PERMISSION_DENIED", "INSUFFICIENT_PERMISSIONS",
-        }:
-            raise RuntimeError(f"Expected an explicit permission denial for {table}")
+        verify_permission_denial(table, result["status"])
     print("Processing and evaluation jobs, Gold publication, lineage and accuracy, and Silver/eval denials passed")
 
 

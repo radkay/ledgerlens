@@ -9,8 +9,18 @@ FORM_FIELDS = {
         "Employer EIN": "employer_ein",
         "Wages": "wages",
     },
+    "1099": {
+        "Recipient SSN": "recipient_ssn",
+        "Payer TIN": "payer_tin",
+        "Other income": "other_income",
+    },
+    "1098": {
+        "Borrower SSN": "borrower_ssn",
+        "Lender TIN": "lender_tin",
+        "Mortgage interest": "mortgage_interest",
+    },
 }
-FORM_HEADER = re.compile(r"^Synthetic (W-2)\s+-\s+\d{4}\b")
+FORM_HEADER = re.compile(r"^Synthetic (W-2|1099|1098)\s+-\s+\d{4}\b")
 
 
 def document_form(text: str) -> str | None:

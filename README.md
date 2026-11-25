@@ -43,6 +43,10 @@ Processing freezes its input watermark, replays accepted decisions in order, and
 
 Readers resolve the latest publication once per request and use its run ID for snapshot queries. The live document state and workbench are separate projections. Evaluation may attach accuracy later to the same run, so the app can show that metric as pending.
 
+## Public Runtime agent
+
+The approved public design lets visitors choose from preset questions. The live Runtime agent answers from published Gold, caches each preset answer for its publication, and limits live generation with a daily cap. Repeated selections reuse the answer for that publication. The MCP lane owns implementation and live verification. [Runtime agent evidence and rollout](docs/evidence/runtime-mcp.md)
+
 ## Rebuild from this repo
 
 Use Python 3.12.3, uv 0.9.18, and Databricks CLI 1.28.0 for the Databricks path.

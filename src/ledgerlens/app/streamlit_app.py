@@ -6,14 +6,20 @@ import sys
 import streamlit as st
 
 # Support both repository entry points and a standalone Databricks Apps source directory.
-app_directory = str(Path(__file__).resolve().parent)
+app_path = Path(__file__).resolve().parent
+app_directory = str(app_path)
 if app_directory not in sys.path:
     sys.path.insert(0, app_directory)
+if app_path.parent.name == "ledgerlens" and (app_path.parent / "mcp").is_dir():
+    source_directory = str(app_path.parent.parent)
+    if source_directory not in sys.path:
+        sys.path.insert(1, source_directory)
 
 from ledgerlens_ui.databricks import Workspace, authenticate_operator
 from ledgerlens_ui.fixtures import FixtureBatch, FixtureReader, FixtureWorkbench
 from ledgerlens_ui.live import CATALOGS, GoldReader, LiveBatch, LiveWorkbench, Sql
 from ledgerlens_ui.overview import show_batches, show_overview
+from ledgerlens_ui.runtime_panel import show_runtime_panel
 from ledgerlens_ui.views import show_outputs, show_workbench
 
 
@@ -68,7 +74,7 @@ def render(settings, *, public_only):
     if scope:
         st.session_state["operator_scope"] = scope
 
-    batch = workbench = None
+    batch = workbench = runtime_settings = None
     if source == "live":
         if workspace is None or environment not in CATALOGS:
             raise ValueError("Configure the live workspace and environment.")
@@ -81,6 +87,15 @@ def render(settings, *, public_only):
             return workspace.reader_token(client_id, client_secret)
 
         reader = GoldReader(Sql(workspace, warehouse, reader_token), environment)
+        if apps_user_auth and settings.get("LEDGERLENS_MODEL_ENDPOINT"):
+            runtime_settings = {
+                "DATABRICKS_HOST": host,
+                "LEDGERLENS_CATALOG": CATALOGS[environment],
+                "DATABRICKS_WAREHOUSE_ID": warehouse,
+                "DATABRICKS_READER_CLIENT_ID": client_id,
+                "DATABRICKS_READER_CLIENT_SECRET": client_secret,
+                "LEDGERLENS_MODEL_ENDPOINT": settings["LEDGERLENS_MODEL_ENDPOINT"],
+            }
         if identity:
             delegated = Sql(workspace, warehouse, lambda: user_token)
             workbench = LiveWorkbench(delegated, environment, identity.actor_id)
@@ -98,7 +113,7 @@ def render(settings, *, public_only):
 
     data_label = "Published Gold" if source == "live" else "Synthetic fixture"
     st.caption(f"{data_label} · {'Operator mode' if identity else 'Public mode'}")
-    pages = ["Overview", "Published outputs"]
+    pages = ["Overview", "Published outputs", "Runtime agent"]
     if workbench:
         pages.append("Review workbench")
     page = st.sidebar.radio("Page", pages)
@@ -107,6 +122,8 @@ def render(settings, *, public_only):
         show_batches(batch, authorize=lambda: delegated_identity(workspace, environment)[0] == identity)
     elif page == "Published outputs":
         show_outputs(reader)
+    elif page == "Runtime agent":
+        show_runtime_panel(reader, fixture=source == "fixture", settings=runtime_settings)
     else:
         show_workbench(workbench)
     if source == "live":

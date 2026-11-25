@@ -14,7 +14,7 @@ Create public radkay/ledgerlens with main as default. Give radkay-bot Write only
 
 The release policy job requires the main PR head to be dev in the same repo. Open the release PR as radkay-bot so Ron can approve and manually merge it. Protected branch deletion restrictions preserve dev after a release merge.
 
-GitHub Actions identifies ci-ok by its publisher and name. CODEOWNERS protects workflow edits. GitHub's label reruns are asynchronous, so open needs-ron PRs as drafts and keep them drafts for the entire hold. Leave auto-merge disabled on a held PR or a protected-file PR awaiting Ron.
+GitHub Actions identifies ci-ok by its publisher and name. CODEOWNERS protects workflow edits. Record label-related cancellations separately in [PR Metrics](CI-METRICS.md). GitHub's label reruns are asynchronous, so open needs-ron PRs as drafts and keep them drafts for the entire hold. Leave auto-merge disabled on a held PR or a protected-file PR awaiting Ron.
 
 Prepare bot-authored PRs for a normal dev increment, a protected-file change, a held draft, and an actual dev-to-main release. Enable squash auto-merge only for the normal increment. Ron supervises `scripts/guardrail_probe.ps1` in a separate bot-authenticated terminal. The opt-in main probe uses an approved release ready to publish if permissions are misconfigured. Close unsuccessful temporary fixture PRs after recording evidence.
 
@@ -71,3 +71,28 @@ Use the named profile instead of a legacy `sandbox_mode` override. In a linked G
 The trusted project loads the forbidden command prefixes from `.codex/rules/default.rules`. The push and merge scripts use fixed arguments and check the active bot identity. Treat prefix rules as local command controls. GitHub rulesets enforce protected refs and merges remotely. [Codex command rules](https://learn.chatgpt.com/docs/agent-configuration/rules)
 
 Use Python 3.12.3 and uv 0.9.18. Regenerate the lock with `uv lock` and validate with `uv sync --locked` followed by `uv run --no-sync python -m unittest discover -s tests`. The workspace runtime probe, bundle deployment and live denial checks require the authenticated radkay-lab admin profile.
+
+## Optional dev MCP evidence
+
+Keep `LEDGERLENS_MCP_SMOKE_READY_DEV` unset in the `ledgerlens-dev` GitHub environment until both MCP probe entry points are on `dev` and a live evidence run is scheduled within the shared Free Edition quota. This variable is evaluated on the optional steps after standard dev integration succeeds. Demo ignores it.
+
+In that GitHub environment set variables `DATABRICKS_READER_CLIENT_ID` for `ledgerlens-dev-reader`, `LEDGERLENS_MODEL_ENDPOINT=databricks-gpt-oss-20b`, and `LEDGERLENS_MANAGED_MCP_URL` to the confirmed managed endpoint. Enter the dev reader's OAuth secret as environment secret `DATABRICKS_READER_CLIENT_SECRET` and grant that reader `CAN QUERY` on the selected model. The managed probe reuses the existing dev CI identity and secret. Set `LEDGERLENS_MCP_SMOKE_READY_DEV=true` for the planned dev integration run and clear it after capturing evidence. Publish bounded outcomes only. [MCP coordination](https://github.com/radkay/ledgerlens/issues/57)
+
+## Staged smoke cutovers
+
+For the published-view rollout in #51, provision dev first, then set `LEDGERLENS_SMOKE_PUBLISHED_VIEWS=true` in the `ledgerlens-dev` GitHub environment after verifying the new Gold history views and grants. Apply the demo schema and set the same variable in `ledgerlens-demo` at its release cutover. The smoke test uses the explicitly selected view family for both pinned queries. Deploy updated App and MCP readers only after their catalog and grants are ready. Keep the Processing schedules paused through the cutover.
+
+For #60, leave `LEDGERLENS_SMOKE_RASTER_DEV` unset until the approved raster-only W-2 fixture and its answer key are seeded in dev. Set it to `true` in `ledgerlens-dev` for one budgeted post-merge run. Smoke checks the same published run for three expected scanned fields and at least one exact match. It reuses the standard Processing and Evaluation invocations. Clear the switch after capturing evidence. Demo always runs the digital baseline.
+
+## Local fixture media capture
+
+Use the isolated [media manifest](../tools/media/pyproject.toml) and lock from the repository root with Python 3.12.3. The media environment uses the App's existing dependency pins because Streamlit and Processing require different Pillow versions. The runner needs Playwright's Chromium system libraries. On a supported Ubuntu capture runner, an administrator can install missing libraries with Playwright's `install-deps chromium`; use the preinstalled system libraries in Build agent sessions.
+
+```bash
+export UV_CACHE_DIR=.uv-cache
+export PLAYWRIGHT_BROWSERS_PATH="$PWD/.uv-cache/playwright"
+uv sync --project tools/media --locked
+uv run --project tools/media --no-sync python -m playwright install --only-shell chromium
+```
+
+Once the App capture script is on the branch, run `uv run --project tools/media --no-sync python src/ledgerlens/app/capture_media.py` from the repository root. Capture uses local synthetic fixtures. [Playwright browser installation](https://playwright.dev/python/docs/browsers)

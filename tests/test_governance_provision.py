@@ -22,7 +22,7 @@ class ProvisioningTests(unittest.TestCase):
             self.assertIn(f"ALTER TABLE {table} SET TBLPROPERTIES ('delta.appendOnly' = 'true')", statements)
             query = (
                 f"SELECT snapshot.* FROM {table} AS snapshot\n"
-                f"JOIN {catalog}.ops.publications AS publication ON snapshot.run_id = publication.run_id"
+                f"JOIN {catalog}.gold.latest_publication AS publication ON snapshot.run_id = publication.run_id"
             )
             self.assertIn(f"CREATE VIEW IF NOT EXISTS {view} AS\n{query}", statements)
             self.assertIn(f"ALTER VIEW {view} AS\n{query}", statements)
@@ -78,7 +78,9 @@ class ProvisioningTests(unittest.TestCase):
             "gold.latest_publication", "gold.current_person_year", "gold.current_missing_documents",
             "gold.current_prefill", "gold.current_lineage", "gold.current_review_summary",
             "gold.current_confidence_summary", "gold.current_extraction_accuracy",
-            "gold.current_document_state",
+            "gold.current_document_state", "gold.published_person_year", "gold.published_missing_documents",
+            "gold.published_prefill", "gold.published_lineage", "gold.published_review_summary",
+            "gold.published_confidence_summary", "gold.published_extraction_accuracy",
         )
         workbench = ("gold.current_document_state", "review.current_workbench",
                      "review.reason_codes", "ops.pipeline_runs")

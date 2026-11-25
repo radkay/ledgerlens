@@ -6,7 +6,9 @@
 /AGENTS.override.md @radkay
 **/AGENTS.override.md @radkay
 /CONTRACT.md @radkay
+/provisioning/ @radkay
 /tests/test_bootstrap.py @radkay
+/tests/test_governance*.py @radkay
 /scripts/guardrail_probe.ps1 @radkay
 /scripts/push-feature @radkay
 /scripts/merge-feature @radkay

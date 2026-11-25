@@ -211,28 +211,14 @@ def configure_warehouse(args, apps, reviewers):
         ("group_name", reviewers),
         *(("service_principal_name", apps[role]) for role in ("integration", "reader")),
     }
-    direct = []
-    legacy_grant = False
     for entry in acl:
-        identity = next((key, entry[key]) for key in ("user_name", "group_name", "service_principal_name")
-                        if key in entry)
-        for grant in entry["all_permissions"]:
-            level = grant["permission_level"]
-            if identity == ("user_name", args.ron_user) and level == "CAN_USE" and not grant.get("inherited"):
-                legacy_grant = True
-                continue
-            if level in {"CAN_USE", "CAN_MANAGE", "IS_OWNER"}:
-                expected.discard(identity)
-            if not grant.get("inherited"):
-                direct.append({identity[0]: identity[1], "permission_level": level})
+        if any(grant["permission_level"] in {"CAN_USE", "CAN_MANAGE", "IS_OWNER"}
+               for grant in entry["all_permissions"]):
+            for key in ("user_name", "group_name", "service_principal_name"):
+                if key in entry:
+                    expected.discard((key, entry[key]))
     updates = [{key: name, "permission_level": "CAN_USE"} for key, name in sorted(expected)]
-    if legacy_grant:
-        # PATCH cannot delete a direct ACL entry. Preserve all other direct entries.
-        updated_identities = {(key, name) for update in updates for key, name in update.items()
-                              if key != "permission_level"}
-        direct = [entry for entry in direct if not any(entry.get(key) == name for key, name in updated_identities)]
-        dbx(profile, "permissions", "set", *target, payload={"access_control_list": direct + updates})
-    elif updates:
+    if updates:
         dbx(profile, "permissions", "update", *target, payload={"access_control_list": updates})
 
 

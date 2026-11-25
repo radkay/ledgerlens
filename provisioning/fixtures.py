@@ -121,6 +121,44 @@ def fixture_entry(pdf, fixture_id, form, person, expected_forms, fields, variant
     return pdf, entry
 
 
+def demo_fixtures():
+    """Return six matched digital forms and one W-2 with a correctable wage."""
+    person_2 = "fixture-person-002"
+    person_3 = "fixture-person-003"
+    inventory = {person_2: ("W-2", "1098"), person_3: ("W-2", "1099")}
+    fixtures = [
+        (pdf, entry | {"expected_forms": list(inventory.get(entry["person_key"], entry["expected_forms"]))})
+        for pdf, entry in digital_fixtures()
+    ]
+
+    for person, ssn_serial, ein_serial, wages, expected_wages, fixture_id in (
+        (person_2, 2, 4, "72000.00", "72000.00", "demo-w2-person-002-digital"),
+        (person_3, 3, 5, "53600.00", "53600.00", "demo-w2-person-003-digital"),
+        (person_3, 3, 6, "1875.OO", "1875.00", "demo-w2-person-003-review-digital"),
+    ):
+        items = [
+            ("Employee SSN", "employee_ssn", synthetic_identifier("ssn", ssn_serial)),
+            ("Employer EIN", "employer_ein", synthetic_identifier("ein", ein_serial)),
+            ("Wages", "wages", wages),
+        ]
+        pdf = digital_w2(form_lines("W-2", person, items))
+        fields = {name: value for _, name, value in items}
+        fields["wages"] = expected_wages
+        fixtures.append(fixture_entry(pdf, fixture_id, "W-2", person, list(inventory[person]), fields))
+
+    items = [
+        ("Recipient SSN", "recipient_ssn", synthetic_identifier("ssn", 3)),
+        ("Payer TIN", "payer_tin", synthetic_identifier("ein", 7)),
+        ("Other income", "other_income", "2400.25"),
+    ]
+    pdf = digital_w2(form_lines("1099", person_3, items))
+    fields = {name: value for _, name, value in items}
+    fixtures.append(fixture_entry(
+        pdf, "demo-1099-person-003-digital", "1099", person_3, list(inventory[person_3]), fields,
+    ))
+    return fixtures
+
+
 def scanned_fixtures():
     """Render the synthetic digital set into separate image-only PDFs."""
     fixtures = []

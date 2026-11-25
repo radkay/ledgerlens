@@ -56,6 +56,8 @@ jobs:
           BUNDLE_VAR_processing_schedule_pause_status: ${{ vars.LEDGERLENS_PROCESSING_SCHEDULE_PAUSE_STATUS || 'PAUSED' }}
           BUNDLE_TARGET: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'demo' }}
           LEDGERLENS_CATALOG: ${{ github.ref == 'refs/heads/dev' && 'ledgerlens_dev' || 'ledgerlens_demo' }}
+          LEDGERLENS_SMOKE_PUBLISHED_VIEWS: ${{ vars.LEDGERLENS_SMOKE_PUBLISHED_VIEWS }}
+          LEDGERLENS_SMOKE_RASTER_DEV: ${{ vars.LEDGERLENS_SMOKE_RASTER_DEV }}
         shell: bash
         run: |
           databricks bundle deploy --target "$BUNDLE_TARGET" --auto-approve

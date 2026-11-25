@@ -14,7 +14,7 @@ Create public radkay/ledgerlens with main as default. Give radkay-bot Write only
 
 The release policy job requires the main PR head to be dev in the same repo. Open the release PR as radkay-bot so Ron can approve and manually merge it. Protected branch deletion restrictions preserve dev after a release merge.
 
-GitHub Actions identifies ci-ok by its publisher and name. CODEOWNERS protects workflow edits. GitHub's label reruns are asynchronous, so open needs-ron PRs as drafts and keep them drafts for the entire hold. Leave auto-merge disabled on a held PR or a protected-file PR awaiting Ron.
+GitHub Actions identifies ci-ok by its publisher and name. CODEOWNERS protects workflow edits. Record label-related cancellations separately in [PR Metrics](CI-METRICS.md). GitHub's label reruns are asynchronous, so open needs-ron PRs as drafts and keep them drafts for the entire hold. Leave auto-merge disabled on a held PR or a protected-file PR awaiting Ron.
 
 Prepare bot-authored PRs for a normal dev increment, a protected-file change, a held draft, and an actual dev-to-main release. Enable squash auto-merge only for the normal increment. Ron supervises `scripts/guardrail_probe.ps1` in a separate bot-authenticated terminal. The opt-in main probe uses an approved release ready to publish if permissions are misconfigured. Close unsuccessful temporary fixture PRs after recording evidence.
 

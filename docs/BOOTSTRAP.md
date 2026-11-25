@@ -58,7 +58,7 @@ Create external reader OAuth credentials only for the Community Cloud demo reade
 
 Both Processing job schedules start paused and run daily at 09:00 UTC when enabled. Set `LEDGERLENS_PROCESSING_SCHEDULE_PAUSE_STATUS` to `UNPAUSED` in the matching GitHub environment when automatic runs are wanted. Set it back to `PAUSED` to persist a pause on redeploy. Use the Databricks Jobs UI for an immediate pause.
 
-Bundle deployment creates the matching Databricks App and syncs the existing Streamlit source. The reviewer group can use that app. Start the app from the workspace after verifying Free Edition capacity. Before enabling live app reads, record the resolved app principal and grant it the matching catalog's Gold reader privileges and `CAN_USE` on the existing SQL warehouse. Operator actions use Ron's delegated identity. [Databricks App bundle deployment](https://docs.databricks.com/aws/en/dev-tools/bundles/apps-tutorial)
+The demo bundle includes `ledgerlens-demo-app` and syncs the existing Streamlit source. Dev bundle deploys manage the jobs only, keeping routine integration runs from consuming App capacity. The demo reviewer group can use the app. Check shared Free Edition capacity before starting it. Free Edition allows three apps per account and stops each app after up to 24 hours. Before enabling live app reads, record the resolved app principal and grant it the demo catalog's Gold reader privileges and `CAN_USE` on the existing SQL warehouse. Operator actions use Ron's delegated identity. [Databricks App bundle deployment](https://docs.databricks.com/aws/en/dev-tools/bundles/apps-tutorial) · [Free Edition limits](https://docs.databricks.com/aws/en/getting-started/free-edition-limitations)
 
 ## Codex and local validation
 

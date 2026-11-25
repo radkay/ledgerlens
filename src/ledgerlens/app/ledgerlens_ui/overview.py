@@ -28,7 +28,7 @@ def show_overview(reader):
 
     st.subheader("Extraction confidence")
     if confidence is None:
-        st.info("Confidence distribution is unavailable for this publication.")
+        st.info("Confidence distribution is pending for this publication.")
     else:
         st.bar_chart({"Confidence": list(confidence), "Fields": list(confidence.values())},
                      x="Confidence", y="Fields", sort=False)
@@ -51,7 +51,14 @@ def show_batches(operator=None, authorize=lambda: False):
         st.button("Run batch", disabled=True)
         return
 
-    schedule = operator.schedule()
+    try:
+        schedule = operator.schedule()
+        if not st.session_state.get("batch_job_run_id") and (active_job := operator.active_job_run()):
+            st.session_state["batch_job_run_id"] = active_job
+            st.session_state["batch_poll_until"] = time.monotonic() + POLL_WINDOW_SECONDS
+    except (OSError, ValueError):
+        st.error("The configured processing job is unavailable.")
+        return
     if schedule is None:
         st.caption("No schedule configured.")
     else:
@@ -63,12 +70,24 @@ def show_batches(operator=None, authorize=lambda: False):
         if not authorize():
             st.rerun()
         job_run_id = st.session_state.get("batch_job_run_id")
-        event = latest_batch_event(operator, job_run_id) if job_run_id else None
-        active = bool(job_run_id and (event is None or event.status in ACTIVE_BATCH_STATES))
         deadline = st.session_state.get("batch_poll_until")
+        try:
+            event = latest_batch_event(operator, job_run_id) if job_run_id else None
+            active = bool(job_run_id and (event is None or event.status in ACTIVE_BATCH_STATES))
+            job_state = operator.terminal_job_state(job_run_id) if active else None
+        except OSError:
+            if deadline and time.monotonic() > deadline:
+                del st.session_state["batch_poll_until"]
+                st.rerun()
+            st.error("Batch status is temporarily unavailable.")
+            return
+        if job_state:
+            active = False
         if job_run_id:
             status = event.status.replace("_", " ").capitalize() if event else "Waiting for pipeline events"
             st.write(f"Batch {job_run_id} · {status}")
+            if job_state:
+                st.caption(f"Databricks job ended · {job_state.replace('_', ' ').title()}")
         if deadline and (not active or time.monotonic() > deadline):
             del st.session_state["batch_poll_until"]
             st.rerun()

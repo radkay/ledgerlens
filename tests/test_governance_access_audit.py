@@ -155,6 +155,26 @@ def audit_catalog(args, environment, roles, subjects, parents):
             f"{full_name}: {problem}"
             for problem in compare_grants(desired, measured, subjects, parents)
         )
+    problems.extend(audit_table_controls(args.workspace_profile, catalog, roles))
+    return problems
+
+
+def audit_table_controls(profile, catalog, roles):
+    writable = {name for grants in roles.values() for name in grants.get("MODIFY", ())}
+    problems = []
+    for table in sorted(writable):
+        full_name = f"{catalog}.{table}"
+        details = provision.dbx(profile, "tables", "get", full_name)
+        if (details.get("data_source_format") != "DELTA"
+                or details.get("properties", {}).get("delta.appendOnly") != "true"):
+            problems.append(f"{full_name}: expected an append-only Delta table")
+        if table == "silver.fields":
+            masks = {column["name"]: column.get("mask") or {} for column in details.get("columns", [])}
+            for column in ("extracted_value", "final_value"):
+                mask = masks.get(column, {})
+                if (mask.get("function_name") != f"{catalog}.silver.mask_identifier"
+                        or mask.get("using_column_names") != ["field_name"]):
+                    problems.append(f"{full_name}.{column}: expected the catalog identifier mask")
     return problems
 
 
@@ -342,6 +362,22 @@ class GovernanceAuditTests(unittest.TestCase):
                 {"service_principal_name": application_id, "permission_level": "CAN_USE"},
             ]}),
         ])
+
+    def test_audit_detects_missing_append_only_or_silver_mask(self):
+        roles = {"processor": {"MODIFY": ("silver.fields",)}, "reviewers": {"MODIFY": ("review.decisions",)}}
+        delta = {"data_source_format": "DELTA", "properties": {"delta.appendOnly": "true"}}
+        mask = {"function_name": "ledgerlens_dev.silver.mask_identifier", "using_column_names": ["field_name"]}
+        silver = delta | {"columns": [
+            {"name": "extracted_value", "mask": mask}, {"name": "final_value", "mask": mask},
+        ]}
+        with patch.object(provision, "dbx", side_effect=[delta, silver]):
+            self.assertEqual(audit_table_controls("profile", "ledgerlens_dev", roles), [])
+        silver["columns"][1]["mask"] = mask | {"function_name": "ledgerlens_demo.silver.mask_identifier"}
+        with patch.object(provision, "dbx", side_effect=[{"data_source_format": "DELTA"}, silver]):
+            self.assertEqual(audit_table_controls("profile", "ledgerlens_dev", roles), [
+                "ledgerlens_dev.review.decisions: expected an append-only Delta table",
+                "ledgerlens_dev.silver.fields.final_value: expected the catalog identifier mask",
+            ])
 
     def test_workspace_acls_limit_explicit_access_to_intended_identities(self):
         args = SimpleNamespace(workspace_profile="profile", warehouse_id="dead")

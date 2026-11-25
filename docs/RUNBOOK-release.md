@@ -51,8 +51,23 @@ Verify dev and set its history-view smoke variable before starting demo. Use the
   read -r -p 'Ron workspace username: ' ron_workspace_user
   read -r -p 'Existing shared 2X-Small SQL warehouse ID: ' warehouse_id
   export UV_CACHE_DIR=.uv-cache
-  uv run --no-sync python provisioning/provision.py demo     --workspace-profile radkay-lab --warehouse-id "$warehouse_id" --ron-user "$ron_workspace_user"
+  uv run --no-sync python provisioning/provision.py demo \
+    --workspace-profile radkay-lab --warehouse-id "$warehouse_id" --ron-user "$ron_workspace_user"
   printf 'ledgerlens_demo provisioned at %s\n' "$(git rev-parse --short HEAD)"
+)
+```
+
+When #65 is included and the hosted App will be enabled, run the App-only grant after demo provisioning. Keep its identity record outside the repository.
+
+```bash
+(
+  set -e
+  cd "$release_checkout"
+  read -r -p 'Ron workspace username: ' ron_workspace_user
+  read -r -p 'Existing shared 2X-Small SQL warehouse ID: ' warehouse_id
+  export UV_CACHE_DIR=.uv-cache
+  uv run --no-sync python provisioning/provision.py demo --demo-app-reader \
+    --workspace-profile radkay-lab --warehouse-id "$warehouse_id" --ron-user "$ron_workspace_user"
 )
 ```
 

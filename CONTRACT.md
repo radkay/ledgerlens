@@ -20,7 +20,7 @@ Proposed for Ron's approval before parallel implementation. All data is syntheti
 | Operator | Ron’s Databricks user | Ron’s Databricks user |
 | Reviewer group | ledgerlens-dev-reviewers | ledgerlens-demo-reviewers |
 
-Schemas in each catalog: bronze, silver, gold, review, eval, ops. Volumes: bronze.inbox and eval.fixtures. The inbox path is /Volumes/{catalog}/bronze/inbox/{sha256}.pdf. The private answer-key manifest is /Volumes/{catalog}/eval/fixtures/manifest.json. Use the existing shared 2X-Small warehouse by explicit ID. Ron creates the workload identities and secrets, grants the Service Principal User roles, and runs the repository provisioner as admin once per environment. The provisioner creates the Unity Catalog objects and reviewer groups, assigns access, and seeds lookup data. The repository fixture generator supplies only synthetic inputs and their corresponding answer key. No fallback catalog, workspace, job, endpoint, model or warehouse.
+Schemas in each catalog: bronze, silver, gold, review, eval, ops. Volumes: bronze.inbox, eval.fixtures and review.masked_previews. The inbox path is /Volumes/{catalog}/bronze/inbox/{sha256}.pdf. The private answer-key manifest is /Volumes/{catalog}/eval/fixtures/manifest.json. Use the existing shared 2X-Small warehouse by explicit ID. Ron creates the workload identities and secrets, grants the Service Principal User roles, and runs the repository provisioner as admin once per environment. The provisioner creates the Unity Catalog objects and reviewer groups, assigns access, and seeds lookup data. The repository fixture generator supplies only synthetic inputs and their corresponding answer key. No fallback catalog, workspace, job, endpoint, model or warehouse.
 
 For every service principal grant workspace access, USE CATALOG only on its catalog, USE SCHEMA only for the objects below, and warehouse CAN USE only for SQL clients. Unity Catalog CREATE, ownership, and grant options stay with the provisioning identity. Referenced privileges are additive.
 
@@ -30,8 +30,10 @@ For every service principal grant workspace access, USE CATALOG only on its cata
 | evaluator | READ VOLUME on eval.fixtures. SELECT on eval.answer_key, bronze.documents, bronze.extractions and ops.publications. SELECT and MODIFY on gold.extraction_accuracy. |
 | ci / evidence | SELECT on the serving views listed below and ops.pipeline_runs. Owns the matching bundled jobs and has Service Principal User on the matching processor and evaluator. |
 | reader | SELECT on the serving views listed below. Optional CAN QUERY on the explicit model endpoint after the live probe. |
-| Ron | Direct READ VOLUME on bronze.inbox. Direct SELECT on gold.current_document_state, review.current_workbench, review.reason_codes and ops.pipeline_runs. Direct MODIFY on review.decisions. CAN USE on the SQL warehouse. Ron can manage job runs as workspace admin during provisioning and verification. |
-| reviewers | Workspace group for authenticated application entitlement. Ron is a member. The group receives no direct data, job, warehouse, or unmask privilege. |
+| Ron | Direct READ VOLUME on bronze.inbox. Workbench data access is through the matching reviewers group. Ron can manage job runs as workspace admin during provisioning and verification. |
+| reviewers | Workspace group for authenticated application entitlement. Ron is a member. USE CATALOG and USE SCHEMA on the matching catalog and required schemas. READ VOLUME on review.masked_previews. SELECT on gold.current_document_state, review.current_workbench, review.reason_codes and ops.pipeline_runs. MODIFY on review.decisions for appends through the workbench. CAN USE on the SQL warehouse. The group receives no grants to raw documents, extraction records, evaluation data, job operations or unmasking. |
+
+The processor also receives READ VOLUME and WRITE VOLUME on review.masked_previews. The serving reader and integration identities receive no access to that volume. Reconcile superseded direct workbench grants when applying the reviewer group grants to an existing catalog.
 
 Configure jobs with their matching run-as identities. Use Delta append-only properties on ledgers and snapshots. MODIFY is broader than INSERT, so restrict backend code to parameterized inserts, keep credentials server-side, and test UPDATE and DELETE denial. Unity Catalog masks cover both Silver string value columns when field_name identifies SSN or TIN. Typed projections and Gold exclude identifier values. The workbench masks identifiers independently of the serving path. No workload other than the evaluator reads the answer key. Use separate identities for dev and demo.
 
@@ -84,6 +86,14 @@ After replay and release selection, the Processing job groups released Silver fi
 Synthetic SSNs use area 000 and synthetic EIN-formatted TINs use prefix 00. Derive person keys independently of identifiers.
 
 Manifest fields: fixture_id, filename, sha256, form_type (W-2, 1099, 1098), variant (digital, scanned), tax_year, person_key, expected form inventory. Private eval entries add expected field names and values. Scanned variants are raster-only PDFs. Extractors accept bytes, doc_id and run_id and return the Bronze attempt record with field entries of field_name, occurrence, extracted_value, confidence (0–1 or null), and bbox (page index and normalized coordinates or null). Missing versions and unreported values stay null. Adapters: pypdf/pdfplumber and ai_parse_document. Accuracy uses original extraction and includes expected missing fields in its denominator.
+
+## Masked document previews
+
+A non-null field bounding box is a JSON object with `page_index`, `left`, `top`, `right` and `bottom`. Page indices are zero-based integers. Coordinates are finite numbers normalized to the rendered page's width and height, with the origin at the top left and the vertical axis increasing downward. Require `0 <= left < right <= 1` and `0 <= top < bottom <= 1`.
+
+Extraction can record an `identifier_coverage` array in the Bronze attempt's `raw_json`. Each record contains `page_index`, a Boolean `complete`, and `boxes` in the bounding box format above. Set `complete` to true only when the extractor has verified coverage of the full rendered page and located every identifier occurrence, including repeated or noncanonical occurrences. An empty `boxes` array is valid only for a page verified to contain no identifiers. Unverified, absent, duplicate or malformed coverage withholds that page. Each box must match the page record and pass coordinate validation. If the location of an unboxed identifier is unknown, withhold every page it may appear on.
+
+The Processing job overwrites the covered identifier pixels and writes a fresh raster-only PDF per verified page to `/Volumes/{catalog}/review/masked_previews/{doc_id}/{extraction_id}/{page_index}.pdf`. Never publish a file for a page whose coverage is incomplete or whose rendering or redaction fails. The workbench serves only available masked pages for the current extraction under the reviewer's identity and displays an unavailable state for withheld pages. The volume contains no original PDFs, source text layers or source metadata.
 
 ## Glossary
 

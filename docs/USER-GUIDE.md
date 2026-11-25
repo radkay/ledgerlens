@@ -42,23 +42,29 @@ Lineage answers two questions, chosen with **Trace direction**:
 - **Document → output** (the default): which published values did this document contribute to?
 - **Gold value → document:** where did this published value come from?
 
-The **Gold value** list contains every published value in the publication. Each entry reads `field · value · context`, for example:
-- `status · present · fixture-person-001 · 2025 · W-2`: a row from the expected-forms check.
-- `wages · 25000.00 · 17cd6db1d855`: a published amount. The last part is the start of the Gold row ID.
+**Gold value** shows the field, value, output type, person and tax year. Use the output type to tell identical amounts apart. For example, these two Gold rows trace back to the same source field:
 
-The same amount can appear more than once, because it's published in more than one Gold output: the person-year total and the pre-filled form. Each appearance has its own Gold row, and both trace back to the same source field.
+- `wages · 25000.00 · person-year total · fixture-person-001 · 2025`
+- `wages · 25000.00 · pre-filled W-2 · fixture-person-001 · 2025`
 
-The lineage table is wide. **Scroll it sideways** to see all of its columns:
+A coverage entry looks like `status · present · expected W-2 · fixture-person-001 · 2025`.
+
+The lineage table shows these columns from left to right. Scroll sideways for the remaining columns.
 
 | Column | Meaning |
 |---|---|
-| `gold_row_id`, `output_field` | The published Gold row and field, for example `wages` |
-| `doc_id` | The source document (identified by the SHA-256 of its PDF) |
-| `field_id` | The extracted field on that document |
+| `output_field` | The published field, for example `wages` |
+| `extractor_name` | The adapter that read the document, for example `pypdf` for a digital PDF or Databricks `ai_parse_document` for scanned pages |
+| `extractor_version` | The adapter version |
+| `decision_id` | The reviewer decision that approved or corrected the field. Empty for an auto-approved field. |
+| `doc_id` | The source document, identified by the SHA-256 of its PDF |
+| `field_id` | The extracted field on the document |
 | `extraction_id` | The extraction attempt that produced the value |
-| `decision_id` | The reviewer decision that approved or corrected it. Shows `None` when the field was auto-approved. |
-| `extractor_name`, `extractor_version` | The adapter that read the document, for example `pypdf 7.0.1` for digital PDFs, or Databricks `ai_parse_document` for scanned pages |
-| `model_name`, `model_version` | The model behind the extractor. Shows `None` for adapters that don't use a model. |
+| `gold_row_id` | The published Gold row that received the value |
+| `model_name` | The model behind the extractor, when used |
+| `model_version` | The model version, when used |
+
+The table displays the first 12 characters of long IDs. Expand **Full lineage identifiers** below the table to copy the complete IDs by row.
 
 ### Pre-filled form
 
@@ -74,10 +80,10 @@ The lineage table is wide. **Scroll it sideways** to see all of its columns:
 3. The table lists every published output that document fed. For the demo W-2 you should see three rows: two `wages` rows (the person-year total and the pre-filled form) and one `status` row (the W-2 is present). All three share the same `doc_id` and `field_id`.
 
 **Trace a published value back to its document:**
-1. Choose **Gold value → document**. The first entry in **Gold value** is selected by default; it's usually a `status` row.
-2. In **Gold value**, choose a `wages` entry, for example `wages · 25000.00 · 17cd6db1d855`.
-3. Read the table, scrolling sideways. You should see one source document, one field and one extraction. `decision_id` shows `None` if the field was auto-approved, and `extractor_name` shows the adapter that read it, for example `pypdf`.
-4. Choose a `status · missing` entry. A missing form has no source document, so its lineage is empty. That's expected.
+1. Choose **Gold value → document**. The picker initially selects the first available published amount.
+2. Choose `wages · 25000.00 · pre-filled W-2 · fixture-person-001 · 2025` in **Gold value**.
+3. Read the table. You should see one source document, one field and one extraction. Expand **Full lineage identifiers** to compare complete IDs with other outputs.
+4. Choose a `status · missing` entry. The app shows “No source field links were published for this selection.” A missing form has no source document.
 
 **Cross-check against the pre-filled form:**
 1. In **Pre-filled form**, choose the same person, year and form.

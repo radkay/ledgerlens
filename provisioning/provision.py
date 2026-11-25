@@ -206,15 +206,17 @@ def assign_reviewer_group(profile, group_id):
 
 
 def configure_warehouse(args, apps, reviewers):
-    ensure_warehouse_use(args.workspace_profile, args.warehouse_id, {
+    profile = args.workspace_profile
+    target = ("warehouses", args.warehouse_id)
+    acl = dbx(profile, "permissions", "get", *target).get("access_control_list", [])
+    expected = {
         ("group_name", reviewers),
         *(("service_principal_name", apps[role]) for role in ("integration", "reader")),
-    })
+    }
+    patch_warehouse_use(profile, target, acl, expected)
 
 
-def ensure_warehouse_use(profile, warehouse_id, expected):
-    target = ("warehouses", warehouse_id)
-    acl = dbx(profile, "permissions", "get", *target).get("access_control_list", [])
+def patch_warehouse_use(profile, target, acl, expected):
     for entry in acl:
         if any(grant["permission_level"] in {"CAN_USE", "CAN_MANAGE", "IS_OWNER"}
                for grant in entry["all_permissions"]):
@@ -300,7 +302,9 @@ def grant_demo_app_reader(args):
         dbx(profile, "grants", "update", kind, full_name, payload={
             "changes": [{"principal": client_id, "add": [privilege]}],
         })
-    ensure_warehouse_use(profile, args.warehouse_id, {("service_principal_name", client_id)})
+    target = ("warehouses", args.warehouse_id)
+    acl = dbx(profile, "permissions", "get", *target).get("access_control_list", [])
+    patch_warehouse_use(profile, target, acl, {("service_principal_name", client_id)})
 
 
 def provision(args):

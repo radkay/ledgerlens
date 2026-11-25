@@ -84,11 +84,13 @@ class WorkbenchTests(unittest.TestCase):
         run_id = PUBLISHED.run_id
         publication = reader.latest_publication()
         lines = reader.lineage(run_id, doc_id=RELEASED.doc_id)
-        self.assertEqual(len(lines), 1)
+        self.assertEqual(len(lines), 2)
         gold_row_id = lines[0].gold_row_id
         value = reader.lineage_values(run_id)[0]
         self.assertEqual(value.output_value, "25000.00")
-        self.assertEqual(reader.lineage(run_id, gold_row_id=gold_row_id, output_field=value.output_field), lines)
+        for line in lines:
+            self.assertEqual(reader.lineage(run_id, gold_row_id=line.gold_row_id, output_field=value.output_field),
+                             [line])
         self.assertEqual(reader.lineage(run_id, gold_row_id=gold_row_id, output_field="other_income"), [])
         self.assertEqual(reader.lineage("unpublished", gold_row_id=gold_row_id, output_field=value.output_field), [])
         decision = Decision("decision-1", RELEASED.doc_id, RELEASED.extraction_id, None, "recall",

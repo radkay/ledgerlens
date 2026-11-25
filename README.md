@@ -7,6 +7,7 @@ LedgerLens turns synthetic tax documents into reviewable, traceable outputs on D
 | Artifact | Link or status |
 |---|---|
 | Public Streamlit demo | `{{RELEASE:DEMO_APP_URL}}` |
+| User guide | [How to use LedgerLens](docs/USER-GUIDE.md) |
 | Demo integration evidence for the release | `{{RELEASE:DEMO_RUN_URL}}` |
 | Publication and lineage walkthrough | `{{RELEASE:PUBLICATION_GIF}}` |
 | Reviewer workbench walkthrough | `{{RELEASE:REVIEW_GIF}}` |

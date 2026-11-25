@@ -2,8 +2,11 @@ import hashlib
 import json
 import unittest
 from datetime import UTC
+from io import BytesIO
 
-from provisioning.fixtures import bootstrap_fixture, digital_fixtures, digital_w2
+from provisioning.fixtures import (
+    bootstrap_fixture, digital_fixtures, digital_w2, identifier_preview_fixtures,
+)
 from src.ledgerlens.extraction import extract_digital_pdf, field_id
 
 BOOTSTRAP_SHA256 = "65912382990c61f773d6b2a109533c7e43d657c8dc52c597e40973b071d23dd8"
@@ -53,15 +56,67 @@ class DigitalExtractionTests(unittest.TestCase):
                 "occurrence": 1,
                 "extracted_value": item["expected_value"],
                 "confidence": None,
-                "bbox": None,
             }
             for item in fixture["fields"]
         ]
-        self.assertEqual(json.loads(record["fields_json"]), expected)
+        fields = json.loads(record["fields_json"])
+        self.assertEqual([{key: value for key, value in field.items() if key != "bbox"}
+                          for field in fields], expected)
+        for field in fields:
+            self.assert_valid_box(field["bbox"], 0)
         retry = extract_digital_pdf(pdf, doc_id, "run-1")
         reprocess = extract_digital_pdf(pdf, doc_id, "run-2")
         self.assertEqual(retry["extraction_id"], record["extraction_id"])
         self.assertNotEqual(reprocess["extraction_id"], record["extraction_id"])
+
+    def assert_valid_box(self, box, page):
+        self.assertEqual(set(box), {"page_index", "left", "top", "right", "bottom"})
+        self.assertEqual(box["page_index"], page)
+        self.assertTrue(0 <= box["left"] < box["right"] <= 1)
+        self.assertTrue(0 <= box["top"] < box["bottom"] <= 1)
+
+    def test_coverage_counts_noncanonical_identifiers_and_withholds_scans(self):
+        (digital, digital_entry), (scanned, scanned_entry) = identifier_preview_fixtures()
+        original = extract_digital_pdf(digital, digital_entry["sha256"], "run-coverage")
+        coverage = json.loads(original["raw_json"])["identifier_coverage"]
+        self.assertEqual([item["page_index"] for item in coverage], [0, 1])
+        for item in coverage:
+            self.assertIs(item["complete"], True)
+            self.assertEqual(len(item["boxes"]), 2)
+            for box in item["boxes"]:
+                self.assert_valid_box(box, item["page_index"])
+        fields = json.loads(original["fields_json"])
+        self.assertEqual([field["bbox"] for field in fields[:2]], coverage[0]["boxes"])
+
+        raster = extract_digital_pdf(scanned, scanned_entry["sha256"], "run-coverage")
+        self.assertEqual(raster["error_code"], "no_text_layer")
+        self.assertEqual(json.loads(raster["raw_json"])["identifier_coverage"], [
+            {"page_index": 0, "complete": False, "boxes": []},
+            {"page_index": 1, "complete": False, "boxes": []},
+        ])
+
+    def test_coverage_distinguishes_no_identifiers_and_unsupported_geometry(self):
+        from pypdf import PdfReader, PdfWriter
+
+        pdf = digital_w2(["Synthetic W-2 - 2025", "Wages: 10.00"])
+        reader = PdfReader(BytesIO(pdf), strict=True)
+        reader.pages[0].rotate(90)
+        writer = PdfWriter()
+        writer.append_pages_from_reader(reader)
+        output = BytesIO()
+        writer.write(output)
+
+        for document, complete in ((pdf, True), (output.getvalue(), False)):
+            doc_id = hashlib.sha256(document).hexdigest()
+            record = extract_digital_pdf(document, doc_id, "run-coverage")
+            self.assertEqual(json.loads(record["raw_json"])["identifier_coverage"], [
+                {"page_index": 0, "complete": complete, "boxes": []},
+            ])
+            field = json.loads(record["fields_json"])[0]
+            if complete:
+                self.assert_valid_box(field["bbox"], 0)
+            else:
+                self.assertIsNone(field["bbox"])
 
     def test_1099_and_1098_match_the_private_answer_key(self):
         for pdf, fixture in digital_fixtures()[1:]:
@@ -110,3 +165,51 @@ class DigitalExtractionTests(unittest.TestCase):
                 self.assertEqual(json.loads(record["fields_json"]), [])
                 self.assertIsInstance(json.loads(record["raw_json"]), dict)
         self.assertEqual(fixture["sha256"], hashlib.sha256(pdf).hexdigest())
+
+    def test_identifier_boxes_cover_all_rendered_identifier_pixels(self):
+        from contextlib import closing
+        from math import ceil, floor
+
+        from PIL import ImageChops, ImageDraw
+        from pypdfium2 import PdfDocument
+
+        from provisioning.fixtures import synthetic_identifier
+
+        pdf, manifest = identifier_preview_fixtures()[0]
+        record = extract_digital_pdf(pdf, manifest["sha256"], "coverage-pixels")
+        raw = json.loads(record["raw_json"])
+
+        def render(document, index):
+            with closing(document[index]) as page, closing(page.render(scale=2, grayscale=True)) as bitmap:
+                return bitmap.to_pil().copy()
+
+        with PdfDocument(pdf) as document:
+            for coverage, text, serial in zip(raw["identifier_coverage"], raw["pages"], (8101, 8102), strict=True):
+                comparison = text
+                for kind in ("ssn", "ein"):
+                    comparison = comparison.replace(
+                        synthetic_identifier(kind, serial), synthetic_identifier(kind, 8299),
+                    )
+                page_index = coverage["page_index"]
+                with closing(document[page_index]) as page, closing(page.get_textpage()) as text_page:
+                    for box, kind in zip(coverage["boxes"], ("ssn", "ein"), strict=True):
+                        with closing(text_page.search(synthetic_identifier(kind, serial))) as search:
+                            start, count = search.get_next()
+                        for index in range(start, start + count):
+                            left, bottom, right, top = text_page.get_charbox(index)
+                            self.assertLessEqual(box["left"], left / 612)
+                            self.assertLessEqual(box["top"], 1 - top / 792)
+                            self.assertGreaterEqual(box["right"], right / 612)
+                            self.assertGreaterEqual(box["bottom"], 1 - bottom / 792)
+                with PdfDocument(digital_w2(comparison.splitlines())) as reference:
+                    delta = ImageChops.difference(render(document, page_index), render(reference, 0))
+                self.assertIsNotNone(delta.getbbox())
+                width, height = delta.size
+                draw = ImageDraw.Draw(delta)
+                for box in coverage["boxes"]:
+                    draw.rectangle(
+                        (floor(box["left"] * width), floor(box["top"] * height),
+                         ceil(box["right"] * width) - 1, ceil(box["bottom"] * height) - 1),
+                        fill=0,
+                    )
+                self.assertIsNone(delta.getbbox())

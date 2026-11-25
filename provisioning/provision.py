@@ -10,9 +10,9 @@ import time
 from urllib.parse import urlencode
 
 if __package__:
-    from .fixtures import bootstrap_fixture
+    from .fixtures import bootstrap_fixture, demo_fixtures
 else:
-    from fixtures import bootstrap_fixture
+    from fixtures import bootstrap_fixture, demo_fixtures
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -236,36 +236,65 @@ def configure_warehouse(args, apps, groups):
         dbx(profile, "permissions", "update", *target, payload={"access_control_list": updates})
 
 
+def merge_fixture_rows(sql, table, columns, key_columns, rows):
+    names = [name for name, _ in columns]
+    values = ",\n    ".join(
+        "(" + ", ".join(f":{name}_{index}" for name in names) + ")"
+        for index in range(len(rows))
+    )
+    parameters = tuple(
+        (f"{name}_{index}", sql_type, value)
+        for index, row in enumerate(rows)
+        for (name, sql_type), value in zip(columns, row, strict=True)
+    )
+    match = " AND ".join(f"target.{name} = source.{name}" for name in key_columns)
+    sql(f"""MERGE INTO {table} AS target
+USING (SELECT * FROM VALUES
+    {values}
+    AS v({", ".join(names)})
+) AS source
+ON {match}
+WHEN NOT MATCHED THEN INSERT *""", parameters)
+
+
 def seed_fixture(args, catalog, sql):
-    pdf, entry = bootstrap_fixture()
+    fixtures = demo_fixtures() if args.environment == "demo" else [bootstrap_fixture()]
+    entries = [entry for _, entry in fixtures]
+    inventory = sorted({
+        (entry["person_key"], entry["tax_year"], form)
+        for entry in entries for form in entry["expected_forms"]
+    })
+    merge_fixture_rows(
+        sql, f"{catalog}.bronze.expected_forms",
+        (("person_key", "STRING"), ("tax_year", "INT"), ("expected_form", "STRING")),
+        ("person_key", "tax_year", "expected_form"), inventory,
+    )
+
+    field_names = ("fixture_id", "doc_id", "field_id", "field_name", "expected_value",
+                   "variant", "form_type")
+    answers = [
+        (entry["fixture_id"], entry["sha256"], field["field_id"], field["field_name"],
+         field["expected_value"], entry["variant"], entry["form_type"])
+        for entry in entries for field in entry["fields"]
+    ]
+    merge_fixture_rows(
+        sql, f"{catalog}.eval.answer_key", tuple((name, "STRING") for name in field_names),
+        ("fixture_id", "field_id"), answers,
+    )
+
+    # Seed metadata before exposing inbox documents, and upload the full manifest last.
+    volume_root = f"dbfs:/Volumes/{catalog}"
     with tempfile.TemporaryDirectory(prefix="ledgerlens-fixture-") as temp:
         directory = Path(temp)
-        document = directory / entry["filename"]
-        document.write_bytes(pdf)
+        for pdf, entry in fixtures:
+            document = directory / entry["filename"]
+            document.write_bytes(pdf)
+            dbx(args.workspace_profile, "fs", "cp", str(document),
+                f"{volume_root}/bronze/inbox/{document.name}", "--overwrite", response=False)
         manifest = directory / "manifest.json"
-        manifest.write_text(json.dumps([entry], indent=2) + "\n")
-        dbx(args.workspace_profile, "fs", "cp", str(document),
-            f"dbfs:/Volumes/{catalog}/bronze/inbox/{entry['filename']}", "--overwrite", response=False)
+        manifest.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
         dbx(args.workspace_profile, "fs", "cp", str(manifest),
-            f"dbfs:/Volumes/{catalog}/eval/fixtures/manifest.json", "--overwrite", response=False)
-
-    for form in entry["expected_forms"]:
-        sql(f"""MERGE INTO {catalog}.bronze.expected_forms AS target
-USING (SELECT :person_key AS person_key, :tax_year AS tax_year, :form AS expected_form) AS source
-ON target.person_key = source.person_key AND target.tax_year = source.tax_year
-   AND target.expected_form = source.expected_form
-WHEN NOT MATCHED THEN INSERT *""",
-            (("person_key", "STRING", entry["person_key"]), ("tax_year", "INT", entry["tax_year"]),
-             ("form", "STRING", form)))
-
-    for field in entry["fields"]:
-        keys = ("fixture_id", "doc_id", "field_id", "field_name", "expected_value", "variant", "form_type")
-        values = entry | field | {"doc_id": entry["sha256"]}
-        columns = ", ".join(f":{key} AS {key}" for key in keys)
-        sql(f"""MERGE INTO {catalog}.eval.answer_key AS target
-USING (SELECT {columns}) AS source
-ON target.fixture_id = source.fixture_id AND target.field_id = source.field_id
-WHEN NOT MATCHED THEN INSERT *""", [(key, "STRING", values[key]) for key in keys])
+            f"{volume_root}/eval/fixtures/manifest.json", "--overwrite", response=False)
 
 
 def provision(args):

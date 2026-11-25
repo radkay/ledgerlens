@@ -6,6 +6,7 @@ from io import BytesIO
 from math import isfinite
 
 from .fields import document_form, extract_fields
+from .geometry import incomplete_coverage
 from .record import attempt_record
 
 _ADAPTER_VERSION = "1"
@@ -43,33 +44,38 @@ class AiParseDocumentExtractor:
             reader = PdfReader(BytesIO(document), strict=True)
             if reader.is_encrypted:
                 return record(error_code="encrypted_pdf")
-            if not reader.pages:
+            page_count = len(reader.pages)
+            if not page_count:
                 return record(error_code="invalid_pdf")
         except (PyPdfError, ValueError, TypeError, KeyError, IndexError, RecursionError):
             return record(error_code="invalid_pdf")
 
         # Binding the bytes keeps the SQL statement constant. Spark service failures
         # propagate to the Processing job for retry.
+        coverage = {"identifier_coverage": incomplete_coverage(page_count)}
         row = self._spark.sql(_PARSE_SQL, args={"document": bytearray(document)}).first()
         try:
             parsed = json.loads(
                 row["parsed_json"], parse_float=_finite_float, parse_constant=_finite_float,
             )
             if not isinstance(parsed, dict):
-                return record(error_code="invalid_parse_result")
+                return record(raw=coverage, error_code="invalid_parse_result")
+            # The service reports element-relative pixel positions without the
+            # rendered page dimensions or a completeness attestation.
+            parsed.update(coverage)
             errors = parsed.get("error_status")
             if errors:
                 return record(raw=parsed, error_code="document_parse_error")
             elements = parsed["document"]["elements"]
             if not isinstance(elements, list):
-                return record(error_code="invalid_parse_result")
+                return record(raw=coverage, error_code="invalid_parse_result")
             text = "\n".join(
                 element["content"]
                 for element in sorted(elements, key=lambda element: element["id"])
                 if element["type"] in _TEXT_ELEMENT_TYPES
             )
         except (KeyError, TypeError, ValueError):
-            return record(error_code="invalid_parse_result")
+            return record(raw=coverage, error_code="invalid_parse_result")
 
         form_type = document_form(text)
         if form_type is None:

@@ -96,6 +96,13 @@ def verify_permission_denial(table, status, *, credentials=()):
     raise RuntimeError(f"Expected an explicit permission denial for {table} ({summary})")
 
 
+def record_publication_output(output_path, run_id):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", run_id):
+        raise ValueError("Invalid publication run ID for GitHub Actions output")
+    with open(output_path, "a", encoding="utf-8") as output:
+        output.write(f"publication_run_id={run_id}\n")
+
+
 def main():
     host = os.environ["DATABRICKS_HOST"].rstrip("/")
     parsed = urlsplit(host)
@@ -199,10 +206,13 @@ def main():
         result = sql(f"SELECT 1 FROM {catalog}.{table} LIMIT 1")
         verify_permission_denial(table, result["status"], credentials=(secret, auth, token))
     print("Processing and evaluation jobs, Gold publication, lineage and accuracy, and Silver/eval denials passed")
+    return published_run_id
 
 
 if __name__ == "__main__":
     try:
-        main()
+        publication_run_id = main()
+        if output_path := os.environ.get("GITHUB_OUTPUT"):
+            record_publication_output(output_path, publication_run_id)
     except HTTPError as error:
         raise SystemExit(f"Databricks HTTP request failed with status {error.code}") from None

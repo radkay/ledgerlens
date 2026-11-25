@@ -44,6 +44,7 @@ jobs:
         with:
           version: '1.28.0'
       - name: Deploy bundle and verify job and published Gold
+        id: publication
         env:
           DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
@@ -83,6 +84,7 @@ jobs:
           DATABRICKS_READER_CLIENT_ID: ${{ vars.DATABRICKS_READER_CLIENT_ID }}
           DATABRICKS_READER_CLIENT_SECRET: ${{ secrets.DATABRICKS_READER_CLIENT_SECRET }}
           LEDGERLENS_CATALOG: ledgerlens_dev
+          LEDGERLENS_EXPECTED_RUN_ID: ${{ steps.publication.outputs.publication_run_id }}
           LEDGERLENS_MODEL_ENDPOINT: ${{ vars.LEDGERLENS_MODEL_ENDPOINT }}
         run: uv run --no-sync python -m ledgerlens.mcp.smoke
       - name: Verify managed dbsql MCP on dev
@@ -93,5 +95,6 @@ jobs:
           DATABRICKS_CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
           LEDGERLENS_CATALOG: ledgerlens_dev
+          LEDGERLENS_EXPECTED_RUN_ID: ${{ steps.publication.outputs.publication_run_id }}
           LEDGERLENS_MANAGED_MCP_URL: ${{ vars.LEDGERLENS_MANAGED_MCP_URL }}
         run: uv run --no-sync python docs/evidence/managed_dbsql_mcp.py

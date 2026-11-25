@@ -1,8 +1,10 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import Mock, patch
 from urllib.error import URLError
 
-from scripts.databricks_smoke import task_error, verify_permission_denial
+from scripts.databricks_smoke import record_publication_output, task_error, verify_permission_denial
 
 
 class TaskErrorTests(TestCase):
@@ -90,3 +92,13 @@ class PermissionDenialTests(TestCase):
         prefix = "SQL denial probe for silver.fields: "
         message = "[PARSE_SYNTAX_ERROR] *** " + "a" * 300
         log.assert_called_once_with(prefix + message[:240] + "…", flush=True)
+
+
+class PublicationOutputTests(TestCase):
+    def test_export_writes_only_the_verified_run_assignment(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            record_publication_output(output, "run_abc")
+            with self.assertRaises(ValueError):
+                record_publication_output(output, "run_abc\nunexpected=true")
+            self.assertEqual(output.read_text(), "publication_run_id=run_abc\n")

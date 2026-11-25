@@ -50,15 +50,16 @@ class DemoFixtureTests(unittest.TestCase):
                     elif name.endswith(("_ein", "_tin")):
                         self.assertRegex(value, r"^00-\d{7}$")
 
-                if form == "W-2" and classify(attempt) == "needs_review":
+                disposition = classify(attempt, form)
+                if disposition == "needs_review":
+                    self.assertEqual(form, "W-2")
                     review_documents.append(entry["fixture_id"])
                     wage_id = field_id(doc_id, "wages", 1)
                     self.assertEqual(extracted[wage_id], "1875.OO")
                     self.assertEqual(expected[wage_id], "1875.00")
                     self.assertEqual(extracted | {wage_id: expected[wage_id]}, expected)
                 else:
-                    if form == "W-2":
-                        self.assertEqual(classify(attempt), "auto_approved")
+                    self.assertEqual(disposition, "auto_approved")
                     self.assertEqual(extracted, expected)
                     actual_forms[person].add(form)
 

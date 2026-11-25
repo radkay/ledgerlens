@@ -21,7 +21,7 @@ resources:
           environment_key: standard
           spark_python_task:
             python_file: ../src/ledgerlens/bootstrap_job.py
-            parameters: [process, '${var.catalog}', '{{job.trigger.type}}', '--job-run-id', '{{job.run_id}}']
+            parameters: [process, '${var.catalog}', '{{job.trigger.type}}', '--job-run-id', '{{job.run_id}}', '--src', '${workspace.file_path}/src']
 
     evaluate:
       name: ledgerlens-${bundle.target}-evaluate
@@ -39,4 +39,4 @@ resources:
           environment_key: standard
           spark_python_task:
             python_file: ../src/ledgerlens/bootstrap_job.py
-            parameters: [evaluate, '${var.catalog}', '{{job.trigger.type}}']
+            parameters: [evaluate, '${var.catalog}', '{{job.trigger.type}}', '--src', '${workspace.file_path}/src']

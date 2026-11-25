@@ -3,15 +3,43 @@
 import base64
 import json
 import os
+import re
 import time
 from urllib.error import HTTPError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 
+TASK_ERROR = re.compile(
+    r"(?:Processing|Evaluation) job failed \([A-Za-z_][A-Za-z0-9_.]{0,79}\)"
+    r"|ModuleNotFoundError: No module named '[A-Za-z_][A-Za-z0-9_.]{0,79}'"
+    r"|(?:AnalysisException|SparkRuntimeException):\s*\[[A-Z][A-Z0-9_.]{2,79}\]"
+)
+
+
 def request(url, *, headers=None, body=None):
     with urlopen(Request(url, data=body, headers=headers or {}), timeout=45) as result:
         return json.load(result)
+
+
+def task_error(api, run):
+    failed_task = next(
+        (task for task in run.get("tasks", []) if task.get("state", {}).get("result_state") != "SUCCESS"),
+        {},
+    )
+    task_run_id = failed_task.get("run_id")
+    if type(task_run_id) is not int or task_run_id <= 0:
+        return ""
+    try:
+        output = api(f"/api/2.1/jobs/runs/get-output?run_id={task_run_id}")
+    except (OSError, ValueError):
+        output = {}
+    # Connector errors may contain data. Log only bounded exception classes and error codes.
+    messages = (output.get("error"), output.get("error_trace"), failed_task.get("state", {}).get("state_message"))
+    for message in messages:
+        if isinstance(message, str) and (match := TASK_ERROR.search(message)):
+            return match.group()
+    return ""
 
 
 def main():
@@ -52,12 +80,17 @@ def main():
 
     def run_job(job_id, role):
         run_id = api("/api/2.1/jobs/run-now", {"job_id": job_id})["run_id"]
+        print(f"{role} job started (Databricks run {run_id})", flush=True)
         run = wait_for(
             lambda: api(f"/api/2.1/jobs/runs/get?run_id={run_id}"),
             lambda item: item["state"]["life_cycle_state"] in {"TERMINATED", "SKIPPED", "INTERNAL_ERROR"},
         )
-        if run["state"].get("result_state") != "SUCCESS":
-            raise RuntimeError(f"{role} job did not succeed")
+        state = run["state"].get("result_state") or run["state"]["life_cycle_state"]
+        if state != "SUCCESS":
+            error = task_error(api, run)
+            detail = f": {error}" if error else ""
+            raise RuntimeError(f"{role} job did not succeed (Databricks run {run_id}, {state}){detail}")
+        print(f"{role} job succeeded (Databricks run {run_id})", flush=True)
         return run_id
 
     def sql(statement, **parameters):

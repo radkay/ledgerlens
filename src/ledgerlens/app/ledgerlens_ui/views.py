@@ -1,0 +1,173 @@
+"""Streamlit views for the reviewer and the published artifacts."""
+
+from dataclasses import asdict
+from datetime import UTC, datetime
+from uuid import uuid4
+
+import streamlit as st
+
+from .outputs import prefill_document, prefill_pdf
+from .workbench import Decision, available_actions, can_correct
+
+
+def show_workbench(operator):
+    st.header("Review workbench")
+    documents = {doc.doc_id: doc for doc in operator.documents()}
+    if not documents:
+        st.info("No documents are available for review.")
+        return
+    doc_id = st.selectbox(
+        "Document", list(documents),
+        format_func=lambda doc_id: f"{documents[doc_id].status.replace('_', ' ').title()} · {doc_id[:12]}",
+    )
+    document = documents[doc_id]
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Masked PDF")
+        pdf = operator.preview(doc_id)
+        if pdf is None:
+            st.info("A verified masked preview is unavailable.")
+        else:
+            st.pdf(pdf, height=540, key=f"pdf-{doc_id}")
+    with right:
+        st.subheader("Extracted fields")
+        for field in document.fields:
+            visible = field.masked()
+            value = visible.final_value if visible.final_value is not None else visible.extracted_value
+            st.text(f"{visible.field_name}  ·  {value if value is not None else '—'}")
+            confidence = visible.confidence
+            if confidence is None:
+                st.badge("Confidence unreported", color="gray")
+            else:
+                color = "green" if confidence >= 0.8 else "orange" if confidence >= 0.5 else "red"
+                st.badge(f"{confidence:.0%} confidence", color=color)
+        if not document.fields:
+            st.caption("No fields are available for the current extraction.")
+        show_decisions(operator, document)
+
+
+def show_decisions(operator, document):
+    st.subheader("Decision")
+    if message := st.session_state.pop("decision_saved", None):
+        st.success(message)
+    corrected_fields = {field.field_id: field.field_name for field in document.fields if can_correct(field)}
+    reasons = operator.reasons()
+    actions = [
+        action for action in available_actions(document.status, reasons)
+        if action != "correct_field" or corrected_fields
+    ]
+    if not actions:
+        st.caption("No decisions are available for this document state.")
+        return
+
+    scope = f"{document.doc_id}-{document.extraction_id}-{document.state_at.isoformat()}"
+    action = st.selectbox("Action", actions, format_func=lambda item: item.replace("_", " ").title(),
+                          key=f"action-{scope}")
+    with st.form(f"decision-{scope}-{action}", clear_on_submit=False):
+        reason = st.selectbox("Reason", reasons[action])
+        field_id = corrected_value = None
+        if action == "correct_field":
+            field_id = st.selectbox("Field", list(corrected_fields), format_func=corrected_fields.__getitem__)
+            corrected_value = st.text_input("Corrected value", max_chars=512)
+        if st.form_submit_button("Record decision"):
+            draft = (document.doc_id, document.extraction_id, field_id, action, reason, corrected_value,
+                     operator.actor_id)
+            previous = st.session_state.get("pending_decision")
+            if previous and draft == (
+                previous.doc_id, previous.extraction_id, previous.field_id, previous.action,
+                previous.reason_code, previous.corrected_value, previous.actor_id,
+            ):
+                decision = previous
+            else:
+                decision = Decision(uuid4().hex, *draft, datetime.now(UTC))
+            try:
+                operator.append_decision(decision, document.state_at)
+            except (PermissionError, ValueError) as error:
+                st.error(str(error))
+            except OSError:
+                st.session_state["pending_decision"] = decision
+                st.error("The decision could not be confirmed. Retry the same submission to reuse its ID.")
+            else:
+                st.session_state.pop("pending_decision", None)
+                st.session_state["decision_saved"] = (
+                    "Recall queued for the next publication." if action == "recall" else "Decision recorded."
+                )
+                st.rerun()
+
+
+def show_outputs(reader):
+    st.header("Published outputs")
+    publication = reader.latest_publication()
+    if publication is None:
+        st.info("Waiting for the first publication.")
+        return
+    st.caption(f"Publication {publication.publication_seq} · {publication.run_id}")
+    show_coverage(reader, publication.run_id)
+    show_lineage(reader, publication.run_id)
+    show_prefill(reader, publication)
+
+
+def show_coverage(reader, run_id):
+    st.subheader("Document coverage")
+    totals = {(row.person_key, row.tax_year): row for row in reader.person_years(run_id)}
+    inventory = reader.expected_documents(run_id)
+    people = sorted(totals.keys() | {(row.person_key, row.tax_year) for row in inventory})
+    if not people:
+        st.caption("No person-year totals or expected documents have been published.")
+        return
+
+    selected = st.selectbox("Person and tax year", people, format_func=lambda key: f"{key[0]} · {key[1]}")
+    expected = [{"Form": row.expected_form, "Status": row.status.capitalize()}
+                for row in inventory if (row.person_key, row.tax_year) == selected]
+    if expected:
+        st.table(expected)
+    else:
+        st.caption("No expected forms are recorded for this person and year.")
+
+    if selected in totals:
+        row = totals[selected]
+        st.table([{"Wages": row.wages, "Other income": row.other_income, "Mortgage interest": row.mortgage_interest}])
+    else:
+        st.caption("No amounts have been published for this person and year.")
+
+
+def show_prefill(reader, publication):
+    st.subheader("Pre-filled form")
+    forms = reader.prefill_forms(publication.run_id)
+    if not forms:
+        st.caption("No pre-filled forms have been published.")
+        return
+    form = st.selectbox("Form", forms, format_func=lambda option: option.label)
+    rows = reader.prefill(publication.run_id, form)
+    if not rows:
+        st.caption("No fields are available for this form in the selected publication.")
+        return
+    st.table([{"Field": row.output_field, "Value": row.output_value} for row in rows])
+    name = form.filename(publication)
+    st.download_button("Download PDF", lambda: prefill_pdf(publication, rows),
+                       file_name=f"{name}.pdf", mime="application/pdf", on_click="ignore")
+    st.download_button("Download JSON", prefill_document(publication, rows),
+                       file_name=f"{name}.json", mime="application/json", on_click="ignore")
+
+
+def show_lineage(reader, run_id):
+    st.subheader("Document lineage")
+    direction = st.radio("Trace direction", ["Document → output", "Gold value → document"], horizontal=True)
+    if direction == "Document → output":
+        documents = reader.lineage_documents(run_id)
+        if not documents:
+            st.caption("No source documents have published lineage.")
+            return
+        doc_id = st.selectbox("Source document", documents)
+        field_links = reader.lineage(run_id, doc_id=doc_id)
+    else:
+        values = reader.lineage_values(run_id)
+        if not values:
+            st.caption("No published Gold values are available.")
+            return
+        value = st.selectbox("Gold value", values, format_func=lambda item: item.label)
+        field_links = reader.lineage(run_id, gold_row_id=value.gold_row_id, output_field=value.output_field)
+    if field_links:
+        st.dataframe([asdict(row) for row in field_links], hide_index=True)
+    else:
+        st.caption("No source field links were published for this selection.")

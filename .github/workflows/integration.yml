@@ -52,15 +52,18 @@ jobs:
           DATABRICKS_WAREHOUSE_ID: ${{ vars.DATABRICKS_WAREHOUSE_ID }}
           BUNDLE_VAR_processor_application_id: ${{ vars.DATABRICKS_PROCESSOR_APPLICATION_ID }}
           BUNDLE_VAR_evaluator_application_id: ${{ vars.DATABRICKS_EVALUATOR_APPLICATION_ID }}
+          BUNDLE_VAR_processing_schedule_pause_status: ${{ vars.LEDGERLENS_PROCESSING_SCHEDULE_PAUSE_STATUS || 'PAUSED' }}
           BUNDLE_TARGET: ${{ github.ref == 'refs/heads/dev' && 'dev' || 'demo' }}
           LEDGERLENS_CATALOG: ${{ github.ref == 'refs/heads/dev' && 'ledgerlens_dev' || 'ledgerlens_demo' }}
         shell: bash
         run: |
           databricks bundle deploy --target "$BUNDLE_TARGET" --auto-approve
           summary=$(databricks bundle summary --target "$BUNDLE_TARGET" --output json)
+          DATABRICKS_EVALUATION_JOB_ID=$(jq -er '.resources.jobs.evaluate.id | tostring | select(test("^[1-9][0-9]*$"))' <<< "$summary")
+          export DATABRICKS_EVALUATION_JOB_ID
           files=$(jq -er '.workspace.file_path' <<< "$summary")
           job_id=$(jq -er '.resources.jobs.process.id | tostring | select(test("^[1-9][0-9]*$"))' <<< "$summary")
-          directory=$(databricks workspace get-status "$files" --output json)
+          directory=$(databricks workspace get-status "$files" --target "$BUNDLE_TARGET" --output json)
           directory_id=$(jq -er '.object_id' <<< "$directory")
           permissions=$(jq -n \
             --arg processor "$BUNDLE_VAR_processor_application_id" \
@@ -68,5 +71,5 @@ jobs:
             '{access_control_list: ([$processor, $evaluator] | map({
               service_principal_name: ., permission_level: "CAN_READ"
             }))}')
-          databricks workspace update-permissions directories "$directory_id" --json "$permissions" >/dev/null
+          databricks workspace update-permissions directories "$directory_id" --target "$BUNDLE_TARGET" --json "$permissions" >/dev/null
           DATABRICKS_JOB_ID="$job_id" uv run --no-sync python scripts/databricks_smoke.py

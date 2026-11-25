@@ -1,0 +1,5 @@
+# Runtime dependencies for Community Cloud and Databricks Apps.
+streamlit==1.52.2
+streamlit-pdf==2.1.0
+requests==2.34.2
+reportlab==4.5.1

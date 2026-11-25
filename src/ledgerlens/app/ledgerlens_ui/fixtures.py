@@ -37,9 +37,14 @@ NEEDS_REVIEW = fixture_document(REVIEW_PDF, "needs_review", "18750.00", 0.46)
 FIXTURE_DOCUMENTS = RELEASED, NEEDS_REVIEW
 FIXTURE_PDFS = {RELEASED.doc_id: RELEASED_PDF, NEEDS_REVIEW.doc_id: REVIEW_PDF}
 FIXTURE_PREFILL = Prefill("fixture-gold-prefill-1", "fixture-person-001", 2025, "W-2", "wages", "25000.00")
-FIXTURE_LINEAGE = Lineage(
+FIXTURE_PERSON_YEAR_ID = "fixture-gold-person-year-1"
+FIXTURE_PREFILL_LINEAGE = Lineage(
     FIXTURE_PREFILL.gold_row_id, FIXTURE_PREFILL.output_field, RELEASED.doc_id,
     RELEASED.fields[2].field_id, RELEASED.extraction_id, None, "fixture", "1",
+)
+FIXTURE_LINEAGE = (
+    replace(FIXTURE_PREFILL_LINEAGE, gold_row_id=FIXTURE_PERSON_YEAR_ID),
+    FIXTURE_PREFILL_LINEAGE,
 )
 
 
@@ -64,27 +69,32 @@ class FixtureReader:
         return [Accuracy("W-2", "digital", 4, 3)] if run_id == PUBLISHED.run_id else []
 
     def lineage_documents(self, run_id):
-        return [FIXTURE_LINEAGE.doc_id] if run_id == PUBLISHED.run_id else []
+        return [RELEASED.doc_id] if run_id == PUBLISHED.run_id else []
 
     def lineage_values(self, run_id):
         if run_id != PUBLISHED.run_id:
             return []
-        values = [GoldValue(FIXTURE_PREFILL.gold_row_id, FIXTURE_PREFILL.output_field, FIXTURE_PREFILL.output_value)]
+        entry = FIXTURE_PREFILL
+        values = [
+            GoldValue(FIXTURE_PERSON_YEAR_ID, entry.output_field, entry.output_value,
+                      "person-year total", entry.person_key, str(entry.tax_year)),
+            GoldValue(entry.gold_row_id, entry.output_field, entry.output_value,
+                      f"pre-filled {entry.form_type}", entry.person_key, str(entry.tax_year)),
+        ]
         for row in self.expected_documents(run_id):
             if row.status == "missing":
-                context = f"{row.person_key} · {row.tax_year} · {row.expected_form}"
                 row_id = f"fixture-missing-{row.person_key}-{row.tax_year}-{row.expected_form}"
-                values.append(GoldValue(row_id, "status", row.status, context))
+                values.append(GoldValue(row_id, "status", row.status, f"expected {row.expected_form}",
+                                        row.person_key, str(row.tax_year)))
         return values
 
     def lineage(self, run_id, *, doc_id=None, gold_row_id=None, output_field=None):
+        rows = FIXTURE_LINEAGE if run_id == PUBLISHED.run_id else ()
         if doc_id is not None and gold_row_id is None and output_field is None:
-            matches = doc_id == FIXTURE_LINEAGE.doc_id
-        elif doc_id is None and gold_row_id is not None and output_field is not None:
-            matches = (gold_row_id, output_field) == (FIXTURE_LINEAGE.gold_row_id, FIXTURE_LINEAGE.output_field)
-        else:
-            raise ValueError("Select a source document or one Gold output field.")
-        return [FIXTURE_LINEAGE] if run_id == PUBLISHED.run_id and matches else []
+            return [row for row in rows if row.doc_id == doc_id]
+        if doc_id is None and gold_row_id is not None and output_field is not None:
+            return [row for row in rows if (row.gold_row_id, row.output_field) == (gold_row_id, output_field)]
+        raise ValueError("Select a source document or one Gold output field.")
 
     def person_years(self, run_id):
         if run_id != PUBLISHED.run_id:

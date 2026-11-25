@@ -140,9 +140,13 @@ class GoldReader:
                        WHEN 'other_income' THEN CAST(p.other_income AS STRING)
                        WHEN 'mortgage_interest' THEN CAST(p.mortgage_interest AS STRING)
                    END) AS output_value,
-                   CASE WHEN d.gold_row_id IS NOT NULL THEN
-                       concat_ws(' · ', d.person_key, CAST(d.tax_year AS STRING), d.expected_form)
-                   END AS context
+                   CASE
+                       WHEN f.gold_row_id IS NOT NULL THEN concat('pre-filled ', f.form_type)
+                       WHEN d.gold_row_id IS NOT NULL THEN concat('expected ', d.expected_form)
+                       WHEN p.gold_row_id IS NOT NULL THEN 'person-year total'
+                   END AS source,
+                   coalesce(f.person_key, d.person_key, p.person_key) AS person_key,
+                   CAST(coalesce(f.tax_year, d.tax_year, p.tax_year) AS STRING) AS tax_year
             FROM links AS l
             LEFT JOIN {self.gold}.published_prefill AS f
                 ON f.run_id = :run_id AND f.gold_row_id = l.gold_row_id AND f.output_field = l.output_field
@@ -152,7 +156,7 @@ class GoldReader:
                 ON p.run_id = :run_id AND p.gold_row_id = l.gold_row_id
             UNION ALL
             SELECT d.gold_row_id, 'status', d.status,
-                   concat_ws(' · ', d.person_key, CAST(d.tax_year AS STRING), d.expected_form)
+                   concat('expected ', d.expected_form), d.person_key, CAST(d.tax_year AS STRING)
             FROM {self.gold}.published_missing_documents AS d
             WHERE d.run_id = :run_id AND NOT EXISTS (
                 SELECT 1 FROM links AS l WHERE l.gold_row_id = d.gold_row_id AND l.output_field = 'status'

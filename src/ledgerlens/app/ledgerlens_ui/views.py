@@ -1,12 +1,11 @@
 """Streamlit views for the reviewer and the published artifacts."""
 
-from dataclasses import asdict
 from datetime import UTC, datetime
 from uuid import uuid4
 
 import streamlit as st
 
-from .outputs import prefill_document, prefill_pdf
+from .outputs import default_gold_value_index, lineage_display, prefill_document, prefill_pdf
 from .workbench import Decision, available_actions, can_correct
 
 
@@ -181,9 +180,15 @@ def show_lineage(reader, run_id):
         if not values:
             st.caption("No published Gold values are available.")
             return
-        value = st.selectbox("Gold value", values, format_func=lambda item: item.label)
+        value = st.selectbox("Gold value", values, index=default_gold_value_index(values),
+                             format_func=lambda item: item.label)
         field_links = reader.lineage(run_id, gold_row_id=value.gold_row_id, output_field=value.output_field)
     if field_links:
-        st.dataframe([asdict(row) for row in field_links], hide_index=True)
+        display, full_identifiers = lineage_display(field_links)
+        st.dataframe(display, hide_index=True)
+        if any(full_identifiers):
+            with st.expander("Full lineage identifiers"):
+                st.json({f"Row {index}": identifiers for index, identifiers in enumerate(full_identifiers, 1)
+                         if identifiers})
     else:
         st.caption("No source field links were published for this selection.")

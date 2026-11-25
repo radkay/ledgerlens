@@ -150,7 +150,7 @@ class LiveAdapterTests(unittest.TestCase):
             result([["publication-1", "7", self.timestamp.isoformat()]]),
             result([["publication-2", "8", self.timestamp.isoformat()]]),
             result([["person-1", "2025", "25000.00", None, None]]),
-            result([["row-1", "wages", "25000.00", None]]),
+            result([["row-1", "wages", "25000.00", "person-year total", "person-1", "2025"]]),
         ]
         reader = GoldReader(self.reader_sql, "demo")
         pinned = reader.latest_publication()
@@ -183,19 +183,23 @@ class LiveAdapterTests(unittest.TestCase):
 
     def test_reverse_lineage_binds_the_exact_output_field_and_publication(self):
         self.workspace.responses = [
-            result([["row-1", "wages", "25000.00", None],
-                    ["row-2", "status", "missing", "person-2 · 2025 · W-2"]]),
+            result([["row-1", "wages", "25000.00", "person-year total", "person-1", "2025"],
+                    ["row-2", "status", "missing", "expected W-2", "person-2", "2025"],
+                    ["row-3", "wages", "25000.00", "pre-filled W-2", "person-1", "2025"]]),
             result([]),
         ]
         reader = GoldReader(self.reader_sql, "demo")
-        wage, value = reader.lineage_values("publication-1")
-        self.assertEqual(wage.label, "wages · 25000.00 · row-1")
-        self.assertEqual(value.label, "status · missing · person-2 · 2025 · W-2")
+        wage, value, prefill = reader.lineage_values("publication-1")
+        self.assertEqual(wage.label, "wages · 25000.00 · person-year total · person-1 · 2025")
+        self.assertEqual(prefill.label, "wages · 25000.00 · pre-filled W-2 · person-1 · 2025")
+        self.assertEqual(value.label, "status · missing · expected W-2 · person-2 · 2025")
         self.assertEqual(reader.lineage("publication-1", gold_row_id=value.gold_row_id,
                                         output_field=value.output_field), [])
         index_query = self.workspace.calls[0][3]["json"]["statement"]
         self.assertEqual(index_query.count(":run_id"), 5)
         self.assertIn("UNION ALL", index_query)
+        self.assertIn("concat('pre-filled ', f.form_type)", index_query)
+        self.assertIn("coalesce(f.person_key, d.person_key, p.person_key)", index_query)
         request = self.workspace.calls[1][3]["json"]
         self.assertIn("gold_row_id = :gold_row_id AND output_field = :output_field", request["statement"])
         self.assertEqual({item["name"]: item["value"] for item in request["parameters"]},

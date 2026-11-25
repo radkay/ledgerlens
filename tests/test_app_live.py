@@ -1,3 +1,4 @@
+import sqlite3
 import sys
 import unittest
 from contextlib import contextmanager, redirect_stderr
@@ -204,6 +205,42 @@ class LiveAdapterTests(unittest.TestCase):
         self.assertIn("gold_row_id = :gold_row_id AND output_field = :output_field", request["statement"])
         self.assertEqual({item["name"]: item["value"] for item in request["parameters"]},
                          {"run_id": "publication-1", "gold_row_id": "row-2", "output_field": "status"})
+
+    def test_lineage_picker_joins_source_context_within_the_pinned_run(self):
+        db = sqlite3.connect(":memory:")
+        self.addCleanup(db.close)
+        db.create_function("concat", 2, lambda left, right: left + right)
+        db.executescript("""
+            CREATE TABLE published_lineage(run_id, gold_row_id, output_field);
+            CREATE TABLE published_person_year(
+                run_id, gold_row_id, person_key, tax_year, wages, other_income, mortgage_interest
+            );
+            CREATE TABLE published_prefill(
+                run_id, gold_row_id, output_field, output_value, form_type, person_key, tax_year
+            );
+            CREATE TABLE published_missing_documents(run_id, gold_row_id, status, person_key, tax_year, expected_form);
+            INSERT INTO published_lineage VALUES ('pinned', 'total', 'wages'), ('pinned', 'form', 'wages');
+            INSERT INTO published_person_year VALUES
+                ('pinned', 'total', 'fixture-person-001', 2025, '25000.00', NULL, NULL),
+                ('new', 'total', 'fixture-person-001', 2025, '90000.00', NULL, NULL);
+            INSERT INTO published_prefill VALUES
+                ('pinned', 'form', 'wages', '25000.00', 'W-2', 'fixture-person-001', 2025),
+                ('new', 'form', 'wages', '90000.00', 'W-2', 'fixture-person-001', 2025);
+            INSERT INTO published_missing_documents VALUES
+                ('pinned', 'missing', 'missing', 'fixture-person-001', 2025, '1099');
+        """)
+
+        class OfflineSql:
+            def execute(self, statement, **values):
+                query = statement.replace("ledgerlens_demo.gold.", "").replace(" AS STRING)", " AS TEXT)")
+                return db.execute(query, values)
+
+        values = GoldReader(OfflineSql(), "demo").lineage_values("pinned")
+        self.assertEqual([value.label for value in values], [
+            "status · missing · expected 1099 · fixture-person-001 · 2025",
+            "wages · 25000.00 · pre-filled W-2 · fixture-person-001 · 2025",
+            "wages · 25000.00 · person-year total · fixture-person-001 · 2025",
+        ])
 
     def test_prefill_reads_only_the_selected_form_in_the_pinned_publication(self):
         self.workspace.responses = [

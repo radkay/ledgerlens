@@ -134,7 +134,7 @@ class GoldReader:
                 SELECT DISTINCT gold_row_id, output_field
                 FROM {self.gold}.published_lineage WHERE run_id = :run_id
             )
-            SELECT l.gold_row_id, l.output_field,
+            SELECT l.gold_row_id AS gold_row_id, l.output_field AS output_field,
                    coalesce(f.output_value, d.status, CASE l.output_field
                        WHEN 'wages' THEN CAST(p.wages AS STRING)
                        WHEN 'other_income' THEN CAST(p.other_income AS STRING)

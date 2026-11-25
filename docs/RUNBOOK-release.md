@@ -65,6 +65,8 @@ fi
 
 Wait for the eligible push run to appear. If the release changed only paths outside the integration filter and there is no run for that commit, dispatch it once with `gh workflow run integration.yml --repo radkay/ledgerlens --ref main`. Confirm bundle deploy, Processing, Evaluation, published Gold lineage and accuracy, and denials for `silver.fields` and `eval.answer_key`. Keep the Actions URL and run IDs. On a quota, usage-limit, or capacity error, stop, record the time and run link in a draft PR titled **Quota hit**, and preserve the error. Schedule no retry or workaround.
 
+Use the [first demo evidence record](evidence/first-demo-integration.md) as a format for capturing the next verified run.
+
 ## 4. Deploy the public Streamlit app
 
 In radkay-lab, open the service principal `ledgerlens-demo-reader` and generate an OAuth secret for that principal. Enter the secret directly in the Streamlit Community Cloud app's **Advanced settings → Secrets**. Create a public Community Cloud app from repository `radkay/ledgerlens`, branch `main`, entry point `src/ledgerlens/app/community_cloud.py`, and Python 3.12. The adjacent `requirements.txt` supplies dependencies. [Databricks OAuth secret setup](https://docs.databricks.com/aws/en/dev-tools/auth/oauth-m2m) · [Community Cloud secrets](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management)

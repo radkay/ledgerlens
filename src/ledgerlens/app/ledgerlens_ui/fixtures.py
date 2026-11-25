@@ -67,7 +67,13 @@ class FixtureReader:
     def lineage_values(self, run_id):
         if run_id != PUBLISHED.run_id:
             return []
-        return [GoldValue(FIXTURE_PREFILL.gold_row_id, FIXTURE_PREFILL.output_field, FIXTURE_PREFILL.output_value)]
+        values = [GoldValue(FIXTURE_PREFILL.gold_row_id, FIXTURE_PREFILL.output_field, FIXTURE_PREFILL.output_value)]
+        for row in self.expected_documents(run_id):
+            if row.status == "missing":
+                context = f"{row.person_key} · {row.tax_year} · {row.expected_form}"
+                row_id = f"fixture-missing-{row.person_key}-{row.tax_year}-{row.expected_form}"
+                values.append(GoldValue(row_id, "status", row.status, context))
+        return values
 
     def lineage(self, run_id, *, doc_id=None, gold_row_id=None, output_field=None):
         if doc_id is not None and gold_row_id is None and output_field is None:

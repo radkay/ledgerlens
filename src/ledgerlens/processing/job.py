@@ -147,7 +147,7 @@ def load_documents(store, inbox, extract, frozen, data, run_id, queued_at, allow
 
 
 def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigger_type,
-            clock=lambda: datetime.now(UTC)):
+            clock=lambda: datetime.now(UTC), preview_volume=None):
     """Run under the serialized Processing job, with one durable freeze per logical run."""
     if not job_run_id or trigger_type not in TRIGGER_TYPES.values():
         raise ValueError("Invalid job invocation")
@@ -237,6 +237,11 @@ def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigge
         tables = build_snapshot(run_id, states, inventory)
         validate_gold_lineage(tables, inventory)
         validate_confidence_summary(tables)
+        if preview_volume is not None:
+            phase = "masked_previews"
+            for state in states.values():
+                preview_volume.write_attempt(inbox, state.attempt)
+            phase = "snapshot_validation"
         for table, rows in tables.items():
             projection = {"silver.fields": silver_projection}.get(table)
             options = {"projection": projection} if projection else {}
@@ -258,10 +263,13 @@ def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigge
 
 
 def run(spark, catalog, job_run_id, trigger):
+    from .preview import PreviewVolume
+
     store = DeltaStore(spark, catalog, readable=INPUTS, writable=WRITES)
     try:
         return publish(store, Inbox(catalog), managed_extractor_plan(spark),
-                       job_run_id=job_run_id, trigger_type=TRIGGER_TYPES[trigger])
+                       job_run_id=job_run_id, trigger_type=TRIGGER_TYPES[trigger],
+                       preview_volume=PreviewVolume(catalog))
     except Exception as error:
         # Connector exception messages can include input values. Report the error class only.
         error_class = getattr(error, "getErrorClass", lambda: None)() or type(error).__name__

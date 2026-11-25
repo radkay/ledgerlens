@@ -19,6 +19,18 @@ class Lineage:
 
 
 @dataclass(frozen=True)
+class GoldValue:
+    gold_row_id: str
+    output_field: str
+    output_value: str | None
+
+    @property
+    def label(self):
+        value = self.output_value if self.output_value is not None else "—"
+        return f"{self.output_field} · {value} · {self.gold_row_id[:12]}"
+
+
+@dataclass(frozen=True)
 class Prefill:
     gold_row_id: str
     person_key: str

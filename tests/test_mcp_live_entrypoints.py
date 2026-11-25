@@ -49,10 +49,16 @@ def managed_result(payload):
 
 
 class ManagedProbeTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        printer = patch.object(managed, "print", create=True)
+        self.print = printer.start()
+        self.addCleanup(printer.stop)
+
     def session(self, *payloads):
         session = Mock()
         session.list_tools = AsyncMock(return_value=SimpleNamespace(
             tools=[SimpleNamespace(name="execute_sql_read_only"), SimpleNamespace(name="poll_sql_result")],
+            nextCursor=None,
         ))
         session.call_tool = AsyncMock(side_effect=[managed_result(payload) for payload in payloads])
         return session
@@ -72,10 +78,45 @@ class ManagedProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(execute.args[0], "execute_sql_read_only")
         self.assertEqual(execute.kwargs["meta"], {"warehouse_id": "a" * 16})
         query = execute.args[1]["query"]
+        self.assertEqual(query, managed.QUERY)
         self.assertIn("ledgerlens_dev.gold.latest_publication", query)
         self.assertIn("l.run_id = p.run_id", query)
         self.assertTrue(query.strip().endswith("LIMIT 1"))
         self.assertEqual(poll.args, ("poll_sql_result", {"statement_id": "statement-1"}))
+
+    async def test_uses_documented_execute_sql_from_paginated_tool_list(self):
+        session = self.session(
+            {"statement_id": "statement-1", "status": {"state": "SUCCEEDED"},
+             "result": {"data_typed_array": [["run-1"]]}},
+        )
+        session.list_tools.side_effect = [
+            SimpleNamespace(tools=[SimpleNamespace(name="execute_sql", description="private description")],
+                            nextCursor="private cursor"),
+            SimpleNamespace(tools=[SimpleNamespace(name="poll_sql_result")], nextCursor=None),
+        ]
+        result = await managed.query_publication(session, "a" * 16, "run-1")
+        self.assertEqual(result["managed_tool"], "execute_sql")
+        session.call_tool.assert_awaited_once_with(
+            "execute_sql", {"query": managed.QUERY}, meta={"warehouse_id": "a" * 16},
+        )
+        self.assertEqual(session.list_tools.await_args.kwargs["params"].cursor, "private cursor")
+        self.assertEqual(json.loads(self.print.call_args.args[0]), {
+            "managed_tools": ["execute_sql", "poll_sql_result"], "redacted_tool_names": 0,
+        })
+        self.assertTrue(self.print.call_args.kwargs["flush"])
+
+    async def test_logs_available_names_and_fails_closed_on_mismatch(self):
+        session = self.session()
+        session.list_tools.return_value = SimpleNamespace(
+            tools=[SimpleNamespace(name="other_tool"), SimpleNamespace(name="invalid secret text")],
+            nextCursor=None,
+        )
+        with self.assertRaisesRegex(managed.ProbeError, "did not list poll_sql_result"):
+            await managed.query_publication(session, "a" * 16, "run-1")
+        self.assertEqual(json.loads(self.print.call_args.args[0]), {
+            "managed_tools": ["other_tool"], "redacted_tool_names": 1,
+        })
+        session.call_tool.assert_not_awaited()
 
     async def test_rejects_other_publication_and_stops_polling(self):
         session = self.session({

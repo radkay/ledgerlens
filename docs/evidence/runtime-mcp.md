@@ -1,6 +1,6 @@
 # LedgerLens MCP and Runtime agent evidence
 
-The Runtime agent requires `LEDGERLENS_MODEL_ENDPOINT=databricks-gpt-oss-20b`. Ron selected the hosted endpoint called by the November 23 capability probe. The original notebook and output are pending in [#12](https://github.com/radkay/ledgerlens/issues/12). The Runtime agent implementation has a credential-free synthetic transcript test. The dev reader invocation is pending.
+The Runtime agent requires `LEDGERLENS_MODEL_ENDPOINT=databricks-gpt-oss-20b`. Ron selected the hosted endpoint called by the November 23 capability probe. The original notebook and output are pending in [#12](https://github.com/radkay/ledgerlens/issues/12). The Runtime agent implementation has a credential-free synthetic transcript test and a verified dev reader invocation.
 
 ## Approved public app behavior
 
@@ -21,11 +21,11 @@ UV_CACHE_DIR=.uv-cache PYTHONPATH=src uv run --no-sync python -m ledgerlens.mcp.
 
 The check discovers a published Gold wage, traces the exact row and field to document, field and extraction IDs, then asks the hosted model for the traced wage. It requires a successful `trace_value` call for the same row and publication and checks the answer against the Gold value. The output records the publication run, row counts, endpoint and tool names. It omits the wage, source identifiers, chat transcript and credentials.
 
-The credentialed dev environment did not have the reader application ID or secret when the smoke was prepared. First is coordinating the protected workflow and contract changes in [#57](https://github.com/radkay/ledgerlens/issues/57). Once the reader can authenticate and query Gold, an invocation HTTP 403 indicates a serving permission to investigate. If the endpoint ACL lacks an applicable grant, the workspace administrator can add `CAN_QUERY` on `databricks-gpt-oss-20b` for the application ID of `ledgerlens-dev-reader`. The permissions API takes the resolved endpoint ID and an additive update. [Databricks serving endpoint permissions](https://docs.databricks.com/aws/en/machine-learning/model-serving/manage-serving-endpoints), [Permissions API](https://docs.databricks.com/api/access-management/v1/update-object-permissions).
+The dev reader completed the bounded Gold query, reverse-lineage trace, and Runtime agent answer through `databricks-gpt-oss-20b`. Publication `f804f31bad34c3e0ecbaf86f44991f1630098215eac07bdecfc998a3adb286e5` returned two Gold query rows and one lineage row. The Runtime agent used `trace_value`. The managed comparison failed in its separate step. [Dev integration run #48](https://github.com/radkay/ledgerlens/actions/runs/45627924094)
 
 ## Managed dbsql comparison
 
-The configured target for the credentialed check is `https://dbc-d6b23c20-689f.cloud.databricks.com/ai-gateway/mcp-services/system.ai.dbsql`. This URL combines the configured dev workspace origin with the documented Unity Gateway service path. A credentialed call remains pending. [Databricks SQL MCP documentation](https://docs.databricks.com/aws/en/agents/mcp-tools/databricks-sql).
+The credentialed probe reached tool discovery at `https://dbc-d6b23c20-689f.cloud.databricks.com/ai-gateway/mcp-services/system.ai.dbsql`. Runs #48 and #49 stopped before submitting SQL because discovery did not satisfy the earlier check for both `execute_sql_read_only` and `poll_sql_result`. The old probe omitted the returned tool names, so those runs cannot establish which names the service advertised. [Dev run #48](https://github.com/radkay/ledgerlens/actions/runs/45627924094), [dev run #49](https://github.com/radkay/ledgerlens/actions/runs/45629452771)
 
 The dev workflow uses the existing `ledgerlens-dev-ci` principal with the `ai-gateway` OAuth scope. Pass the explicit target in `LEDGERLENS_MANAGED_MCP_URL`, the existing `DATABRICKS_HOST`, `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET` and `DATABRICKS_WAREHOUSE_ID`, and `LEDGERLENS_CATALOG=ledgerlens_dev`. Pass the existing smoke's publication as `LEDGERLENS_EXPECTED_RUN_ID` when available.
 
@@ -33,11 +33,11 @@ The dev workflow uses the existing `ledgerlens-dev-ci` principal with the `ai-ga
 UV_CACHE_DIR=.uv-cache uv run --no-sync python docs/evidence/managed_dbsql_mcp.py
 ```
 
-The script calls `execute_sql_read_only` with one fixed query that checks for Gold lineage in the latest publication and limits the response to one row. It passes the warehouse explicitly and polls `poll_sql_result` under both a count and a deadline. Success logs the verified endpoint, tool, publication run, statement ID, poll count and row count.
+The script prints a `managed_tools` JSON diagnostic with the discovered tool names before calling SQL. It omits tool descriptions, schemas, cursors and credentials. It prefers the documented `execute_sql_read_only` tool when listed and can use the documented `execute_sql` tool for the same fixed read-only query. The query checks for Gold lineage in the latest publication and limits the response to one row. The probe requires the documented `poll_sql_result` name, passes the warehouse explicitly, and bounds polling by count and deadline. Success logs the verified endpoint, selected tool, publication run, statement ID, poll count and row count. [Databricks SQL MCP tool list and example](https://docs.databricks.com/aws/en/agents/mcp-tools/databricks-sql#tools)
 
 | Surface | Caller | Query boundary |
 |---|---|---|
 | Custom LedgerLens MCP | Dev reader | Two domain tools, fixed parameterized statements and fixed response bounds |
-| Managed dbsql MCP | Dev integration | Managed read-only SQL tool under Unity Catalog permissions. The check supplies a fixed query and an explicit warehouse. |
+| Managed dbsql MCP | Dev integration | Documented SQL execution tool under Unity Catalog permissions. The probe supplies a fixed read-only query and an explicit warehouse. |
 
-The managed service's Unity Gateway access and preview availability remain unverified in this workspace. A permission failure should identify the missing privilege before any change to the integration identity. Attach the credentialed workflow run and the emitted summaries to this page after success. Keep the November 23 artifact intake tied to [#12](https://github.com/radkay/ledgerlens/issues/12).
+The revised discovery and tool selection passed synthetic tests. The next eligible dev push will capture the workspace's actual list and attempt the query if the documented tools are present. Managed SQL execution remains unverified. No live rerun was started for this revision. Keep the November 23 artifact intake tied to [#12](https://github.com/radkay/ledgerlens/issues/12).

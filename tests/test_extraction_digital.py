@@ -1,5 +1,4 @@
 import hashlib
-import importlib.util
 import json
 import unittest
 from datetime import UTC
@@ -33,7 +32,6 @@ class ExtractionIdentityTests(unittest.TestCase):
             self.assertEqual(field_id(BOOTSTRAP_SHA256, name, 1), expected)
 
 
-@unittest.skipUnless(importlib.util.find_spec("pypdf"), "pypdf requires the shared dependency update")
 class DigitalExtractionTests(unittest.TestCase):
     def test_w2_matches_the_private_answer_key(self):
         pdf, fixture = bootstrap_fixture()

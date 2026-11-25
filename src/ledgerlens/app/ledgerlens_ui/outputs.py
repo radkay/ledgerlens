@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import json
+import re
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,22 @@ class GoldValue:
 
 
 @dataclass(frozen=True)
+class Form:
+    person_key: str
+    tax_year: int
+    form_type: str
+
+    @property
+    def label(self):
+        return f"{self.form_type} · {self.tax_year} · {self.person_key}"
+
+    def filename(self, publication):
+        label = f"{self.form_type}-{self.tax_year}-{self.person_key}"
+        safe_label = re.sub(r"[^a-zA-Z0-9_-]+", "-", label).strip("-")[:100]
+        return f"ledgerlens-{safe_label}-publication-{publication.publication_seq}"
+
+
+@dataclass(frozen=True)
 class Prefill:
     gold_row_id: str
     person_key: str
@@ -39,12 +56,17 @@ class Prefill:
     output_field: str
     output_value: str | None
 
+    @property
+    def form(self):
+        return Form(self.person_key, self.tax_year, self.form_type)
+
 
 def prefill_document(publication, rows):
     first = rows[0]
     return json.dumps({
         "run_id": publication.run_id,
         "publication_seq": publication.publication_seq,
+        "published_at": publication.published_at.isoformat(),
         "person_key": first.person_key,
         "tax_year": first.tax_year,
         "form_type": first.form_type,

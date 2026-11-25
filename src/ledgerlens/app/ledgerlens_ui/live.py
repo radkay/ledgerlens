@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from .dashboard import Accuracy, PipelineEvent, Publication, Schedule
 from .fixtures import ASSETS
-from .outputs import GoldValue, Lineage, Prefill
+from .outputs import Form, GoldValue, Lineage, Prefill
 from .workbench import Field, ReviewDocument, validate_decision
 
 CATALOGS = {"dev": "ledgerlens_dev", "demo": "ledgerlens_demo"}
@@ -128,14 +128,24 @@ class GoldReader:
         """, run_id=run_id, **parameters)
         return [Lineage(*row) for row in rows]
 
-    def prefill(self, run_id):
+    def prefill_forms(self, run_id):
+        rows = self.sql.execute(f"""
+            SELECT DISTINCT person_key, tax_year, form_type
+            FROM {self.gold}.current_prefill WHERE run_id = :run_id
+            ORDER BY form_type, tax_year DESC, person_key
+        """, run_id=run_id)
+        return [Form(person, int(year), form_type) for person, year, form_type in rows]
+
+    def prefill(self, run_id, form):
         rows = self.sql.execute(f"""
             SELECT gold_row_id, person_key, tax_year, form_type, output_field, output_value
-            FROM {self.gold}.current_prefill WHERE run_id = :run_id
-            ORDER BY person_key, tax_year, form_type, output_field
-        """, run_id=run_id)
-        return [Prefill(row_id, person, int(year), form, field, value)
-                for row_id, person, year, form, field, value in rows]
+            FROM {self.gold}.current_prefill
+            WHERE run_id = :run_id AND person_key = :person_key
+              AND tax_year = CAST(:tax_year AS INT) AND form_type = :form_type
+            ORDER BY output_field
+        """, run_id=run_id, person_key=form.person_key, tax_year=str(form.tax_year), form_type=form.form_type)
+        return [Prefill(row_id, person, int(year), form_type, field, value)
+                for row_id, person, year, form_type, field, value in rows]
 
 
 class LiveWorkbench:

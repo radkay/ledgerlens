@@ -106,19 +106,26 @@ def show_outputs(reader):
 
     show_lineage(reader, run_id)
 
+    show_prefill(reader, publication)
+
+
+def show_prefill(reader, publication):
     st.subheader("Pre-filled form")
-    rows = reader.prefill(run_id)
-    if not rows:
+    forms = reader.prefill_forms(publication.run_id)
+    if not forms:
         st.caption("No pre-filled forms have been published.")
         return
-    forms = sorted({(row.person_key, row.tax_year, row.form_type) for row in rows})
-    selected = st.selectbox("Form", forms, format_func=lambda item: " · ".join(map(str, item)))
-    form = [row for row in rows if (row.person_key, row.tax_year, row.form_type) == selected]
-    st.table([{"Field": row.output_field, "Value": row.output_value} for row in form])
-    st.download_button("Download PDF", lambda: prefill_pdf(publication, form),
-                       file_name=f"prefill-{publication.publication_seq}.pdf", mime="application/pdf")
-    st.download_button("Download JSON", prefill_document(publication, form),
-                       file_name=f"prefill-{publication.publication_seq}.json", mime="application/json")
+    form = st.selectbox("Form", forms, format_func=lambda option: option.label)
+    rows = reader.prefill(publication.run_id, form)
+    if not rows:
+        st.caption("No fields are available for this form in the selected publication.")
+        return
+    st.table([{"Field": row.output_field, "Value": row.output_value} for row in rows])
+    name = form.filename(publication)
+    st.download_button("Download PDF", lambda: prefill_pdf(publication, rows),
+                       file_name=f"{name}.pdf", mime="application/pdf", on_click="ignore")
+    st.download_button("Download JSON", prefill_document(publication, rows),
+                       file_name=f"{name}.json", mime="application/json", on_click="ignore")
 
 
 def show_lineage(reader, run_id):

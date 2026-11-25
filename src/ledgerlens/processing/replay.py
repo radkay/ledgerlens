@@ -7,8 +7,15 @@ from decimal import Decimal
 import re
 
 
-IDENTIFIERS = {"employee_ssn", "employer_ein"}
-WAGE = re.compile(r"(?:0|[1-9][0-9]{0,15})(?:\.[0-9]{1,2})?", re.ASCII)
+AMOUNT_FIELDS = {"W-2": "wages", "1099": "other_income", "1098": "mortgage_interest"}
+FORM_IDENTIFIERS = {
+    "W-2": {"employee_ssn", "employer_ein"},
+    "1099": {"recipient_ssn", "payer_tin"},
+    "1098": {"borrower_ssn", "lender_tin"},
+}
+IDENTIFIERS = set().union(*FORM_IDENTIFIERS.values())
+MONEY = set(AMOUNT_FIELDS.values())
+DECIMAL = re.compile(r"(?:0|[1-9][0-9]{0,15})(?:\.[0-9]{1,2})?", re.ASCII)
 ACTIONS = {
     "approve": {"needs_review", "approved"},
     "correct_field": {"needs_review", "approved"},
@@ -30,7 +37,7 @@ def field_id(doc_id, name, occurrence):
 
 
 def amount(value):
-    if isinstance(value, str) and WAGE.fullmatch(value):
+    if isinstance(value, str) and DECIMAL.fullmatch(value):
         return Decimal(value).quantize(Decimal("0.01"))
     return None
 
@@ -39,8 +46,8 @@ def fields_for(attempt):
     fields = {}
     for entry in json.loads(attempt["fields_json"]):
         name, occurrence = entry["field_name"], entry["occurrence"]
-        if name not in IDENTIFIERS | {"wages"} or type(occurrence) is not int or occurrence < 1:
-            raise ValueError("Invalid digital W-2 field")
+        if name not in IDENTIFIERS | MONEY or type(occurrence) is not int or occurrence < 1:
+            raise ValueError("Invalid synthetic form field")
         identifier = field_id(attempt["doc_id"], name, occurrence)
         if identifier in fields:
             raise ValueError("Duplicate extraction field")
@@ -48,12 +55,13 @@ def fields_for(attempt):
     return fields
 
 
-def classify(attempt):
+def classify(attempt, form):
     fields = list(fields_for(attempt).values())
-    if (len(fields) == 3 and {item["field_name"] for item in fields} == IDENTIFIERS | {"wages"}
+    expected = FORM_IDENTIFIERS[form] | {AMOUNT_FIELDS[form]}
+    if (len(fields) == len(expected) and {item["field_name"] for item in fields} == expected
             and all(item["occurrence"] == 1 for item in fields)
             and all(
-                amount(item["extracted_value"]) is not None if item["field_name"] == "wages"
+                amount(item["extracted_value"]) is not None if item["field_name"] in MONEY
                 else isinstance(item["extracted_value"], str) and bool(item["extracted_value"])
                 for item in fields
             )):
@@ -95,7 +103,7 @@ class Document:
             entry = fields.get(row["field_id"])
             value = row["corrected_value"]
             if (entry is None or not isinstance(value, str) or not value.strip()
-                    or (entry["field_name"] == "wages" and amount(value) is None)):
+                    or (entry["field_name"] in MONEY and amount(value) is None)):
                 raise ValueError("Invalid field correction")
             self.corrections[row["field_id"]] = row
         elif row["field_id"] is not None or row["corrected_value"] is not None:

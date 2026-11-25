@@ -40,6 +40,18 @@ class PipelineEvent:
 
 
 @dataclass(frozen=True)
+class BatchActivity:
+    job_run_id: str | None
+    event: PipelineEvent | None = None
+    terminal_job_state: str | None = None
+
+    @property
+    def active(self):
+        return bool(self.job_run_id and not self.terminal_job_state
+                    and (self.event is None or self.event.status in ACTIVE_BATCH_STATES))
+
+
+@dataclass(frozen=True)
 class Schedule:
     expression: str
     timezone: str
@@ -94,3 +106,18 @@ def read_overview(reader: OverviewReader):
 
 def latest_batch_event(operator: BatchOperator, job_run_id: str) -> PipelineEvent | None:
     return max(operator.pipeline_runs(job_run_id), key=lambda event: event.event_seq, default=None)
+
+
+def read_batch_activity(operator: BatchOperator, tracked_run_id: str | None) -> BatchActivity:
+    def read(job_run_id):
+        event = latest_batch_event(operator, job_run_id)
+        job_state = None
+        if event is None or event.status in ACTIVE_BATCH_STATES:
+            job_state = operator.terminal_job_state(job_run_id)
+        return BatchActivity(job_run_id, event, job_state)
+
+    tracked = read(tracked_run_id) if tracked_run_id else BatchActivity(None)
+    if tracked.active:
+        return tracked
+    active_run = operator.active_job_run()
+    return read(active_run) if active_run and active_run != tracked_run_id else tracked

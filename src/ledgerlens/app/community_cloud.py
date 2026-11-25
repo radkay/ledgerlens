@@ -6,9 +6,10 @@ import sys
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
-app_directory = str(Path(__file__).resolve().parent)
-if app_directory not in sys.path:
-    sys.path.insert(0, app_directory)
+app_directory = Path(__file__).resolve().parent
+for path in (app_directory.parent.parent, app_directory):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from streamlit_app import main
 

@@ -26,6 +26,16 @@ class Workspace:
         self.trace.append((f"{method} {safe_path}", None))
         return self._request(method, path, headers={"Authorization": f"Bearer {token}"}, **kwargs)
 
+    def preview_listing(self, path, token, params):
+        self.trace.append(("GET /api/2.0/fs/directories/{masked_preview_directory}", None))
+        return self._request("GET", f"/api/2.0/fs/directories{path}",
+                             headers={"Authorization": f"Bearer {token}"}, params=params, missing_ok=True)
+
+    def preview_pdf(self, path, token):
+        self.trace.append(("GET /api/2.0/fs/files/{masked_preview_page}", None))
+        return self._request("GET", f"/api/2.0/fs/files{path}",
+                             headers={"Authorization": f"Bearer {token}"}, pdf=True, missing_ok=True)
+
     def reader_token(self, client_id, client_secret):
         path = "/oidc/v1/token"
         self.trace.append((f"POST {path}", None))
@@ -35,24 +45,33 @@ class Workspace:
             raise OSError("Databricks reader authentication failed.")
         return result["access_token"]
 
-    def _request(self, method, path, **kwargs):
+    def _request(self, method, path, *, missing_ok=False, pdf=False, **kwargs):
         import requests
 
         try:
             with requests.Session() as session:
                 session.trust_env = False
-                response = session.request(
-                    method, self.host + path,
-                    timeout=(5, 15), allow_redirects=False, **kwargs,
-                )
-            if response.status_code in (401, 403):
-                raise PermissionError("Databricks denied the request.")
-            if not 200 <= response.status_code < 300:
-                raise OSError("Databricks did not complete the request.")
-            payload = response.json()
-            if not isinstance(payload, dict):
-                raise OSError("Databricks returned an invalid response.")
-            return payload
+                with session.request(method, self.host + path, timeout=(5, 15), allow_redirects=False,
+                                     stream=pdf, **kwargs) as response:
+                    if response.status_code == 404 and missing_ok:
+                        return None
+                    if response.status_code in (401, 403):
+                        raise PermissionError("Databricks denied the request.")
+                    if not 200 <= response.status_code < 300:
+                        raise OSError("Databricks did not complete the request.")
+                    if pdf:
+                        content = bytearray()
+                        for chunk in response.iter_content(chunk_size=65_536):
+                            content.extend(chunk)
+                            if len(content) > 8 * 1024 * 1024:
+                                raise OSError("Databricks preview exceeds the page size limit.")
+                        if not content.startswith(b"%PDF-"):
+                            raise OSError("Databricks returned an invalid preview.")
+                        return bytes(content)
+                    payload = response.json()
+                    if not isinstance(payload, dict):
+                        raise OSError("Databricks returned an invalid response.")
+                    return payload
         except (requests.RequestException, ValueError):
             raise OSError("Databricks did not complete the request.") from None
 

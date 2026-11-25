@@ -1,8 +1,10 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import Mock, patch
 from urllib.error import URLError
 
-from scripts.databricks_smoke import task_error, verify_permission_denial
+from scripts.databricks_smoke import record_publication_output, task_error, verify_accuracy, verify_permission_denial
 
 
 class TaskErrorTests(TestCase):
@@ -90,3 +92,33 @@ class PermissionDenialTests(TestCase):
         prefix = "SQL denial probe for silver.fields: "
         message = "[PARSE_SYNTAX_ERROR] *** " + "a" * 300
         log.assert_called_once_with(prefix + message[:240] + "…", flush=True)
+
+
+class PublicationOutputTests(TestCase):
+    def test_export_writes_only_the_verified_run_assignment(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            record_publication_output(output, "run_abc")
+            with self.assertRaises(ValueError):
+                record_publication_output(output, "run_abc\nunexpected=true")
+            self.assertEqual(output.read_text(), "publication_run_id=run_abc\n")
+
+
+class AccuracySmokeTests(TestCase):
+    def test_pinned_raster_uses_same_history_view_and_requires_a_positive_match(self):
+        sql = Mock(return_value={"status": {"state": "SUCCEEDED"}, "result": {"data_array": [["1"]]}})
+        with patch("builtins.print"):
+            verify_accuracy(sql, "ledgerlens_dev", "published", "run-x", raster=True)
+        digital, scanned = sql.call_args_list
+        self.assertEqual(digital.kwargs, {"run_id": "run-x", "variant": "digital"})
+        self.assertEqual(scanned.kwargs, {"run_id": "run-x", "variant": "scanned"})
+        for check in (digital, scanned):
+            self.assertIn("ledgerlens_dev.gold.published_extraction_accuracy", check.args[0])
+        self.assertIn("expected_count = 3 AND exact_match_count BETWEEN 1", scanned.args[0])
+
+    def test_baseline_uses_only_digital_accuracy(self):
+        sql = Mock(return_value={"status": {"state": "SUCCEEDED"}, "result": {"data_array": [["1"]]}})
+        with patch("builtins.print"):
+            verify_accuracy(sql, "ledgerlens_demo", "current", "run-x", raster=False)
+        sql.assert_called_once()
+        self.assertEqual(sql.call_args.kwargs, {"run_id": "run-x", "variant": "digital"})

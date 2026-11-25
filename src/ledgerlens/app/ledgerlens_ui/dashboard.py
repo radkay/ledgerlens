@@ -10,6 +10,7 @@ DOCUMENT_STATES = (
     "received", "extracted", "needs_review", "auto_approved",
     "approved", "rejected", "released", "recalled",
 )
+CONFIDENCE_BUCKETS = ("[0, 0.5)", "[0.5, 0.8)", "[0.8, 1]", "Unreported")
 ACTIVE_BATCH_STATES = frozenset({"queued", "running", "validated"})
 
 
@@ -26,6 +27,13 @@ class Accuracy:
     variant: str
     expected_count: int
     exact_match_count: int
+
+
+@dataclass(frozen=True)
+class Confidence:
+    form_type: str
+    bucket: str
+    count: int
 
 
 @dataclass(frozen=True)
@@ -62,7 +70,7 @@ class OverviewReader(Protocol):
     def latest_publication(self) -> Publication | None: ...
     def document_states(self) -> Mapping[str, int] | Sequence[str]: ...
     def review_summary(self, run_id: str) -> dict[str, int]: ...
-    def confidence_scores(self, run_id: str) -> list[float | None] | None: ...
+    def confidence_summary(self, run_id: str) -> list[Confidence]: ...
     def extraction_accuracy(self, run_id: str) -> list[Accuracy]: ...
 
 
@@ -75,7 +83,7 @@ class BatchOperator(Protocol):
 
 
 def confidence_distribution(scores: list[float | None]) -> dict[str, int]:
-    counts = dict.fromkeys(("[0, 0.5)", "[0.5, 0.8)", "[0.8, 1]", "Unreported"), 0)
+    counts = dict.fromkeys(CONFIDENCE_BUCKETS, 0)
     for score in scores:
         if score is None:
             counts["Unreported"] += 1
@@ -93,14 +101,12 @@ def read_overview(reader: OverviewReader):
     documents = Counter(reader.document_states())
     live_counts = {status: documents[status] for status in DOCUMENT_STATES}
     if publication is None:
-        return publication, live_counts, {}, None, []
+        return publication, live_counts, {}, [], []
 
     run_id = publication.run_id
-    scores = reader.confidence_scores(run_id)
-    confidence = confidence_distribution(scores) if scores is not None else None
     return (
         publication, live_counts, reader.review_summary(run_id),
-        confidence, reader.extraction_accuracy(run_id),
+        reader.confidence_summary(run_id), reader.extraction_accuracy(run_id),
     )
 
 

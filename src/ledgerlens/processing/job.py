@@ -7,7 +7,6 @@ from hashlib import sha256
 from pathlib import Path
 
 from .adapters import ExtractorPlan, managed_extractor_plan
-from .preview import PreviewVolume
 from .replay import canonical_decisions, classify, fingerprint, replay
 from .snapshot import (
     GRAINS, MetadataError, build_snapshot, metadata, silver_projection, validate_confidence_summary,
@@ -264,6 +263,8 @@ def publish(store, inbox, extract, *, extractor_version=None, job_run_id, trigge
 
 
 def run(spark, catalog, job_run_id, trigger):
+    from .preview import PreviewVolume
+
     store = DeltaStore(spark, catalog, readable=INPUTS, writable=WRITES)
     try:
         return publish(store, Inbox(catalog), managed_extractor_plan(spark),

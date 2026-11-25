@@ -199,6 +199,38 @@ class ProcessingTests(unittest.TestCase):
         self.assertEqual((final["status"], final["trigger_type"], final["job_run_id"]),
                          ("skipped_duplicate", "scheduled", "2"))
 
+    def test_repair_of_skipped_trigger_stays_pinned_when_new_decision_arrives(self):
+        first = self.run_job("1")
+        self.assertEqual(self.run_job("2", "scheduled"), first)
+        self.decision("recall")
+        self.assertEqual(self.run_job("2", "scheduled"), first)
+        self.assertEqual(len(self.store.read(PUBLICATIONS)), 1)
+        self.assertEqual(self.store.serving("gold.review_summary")[0]["status"], "released")
+        self.assertNotEqual(self.run_job("3"), first)
+        self.assertEqual(self.store.serving("gold.review_summary")[0]["status"], "recalled")
+
+    def test_same_timestamp_decisions_replay_by_id_in_any_append_order(self):
+        self.wages = "unreadable"
+        self.run_job("1")
+        attempt, = self.store.read(EXTRACTIONS)
+        extraction_id = attempt["extraction_id"]
+        second = self.decision("correct_field", extraction=extraction_id,
+                               value="22.00", decision_id="b")
+        first = self.decision("correct_field", extraction=extraction_id,
+                              value="11.00", decision_id="a")
+        first = first | {"decided_at": second["decided_at"]}
+        self.store.history[DECISIONS][-1] = [second, first]
+        history, tick = deepcopy(self.store.history), self.tick
+        winning_run = self.run_job("2")
+        snapshot = self.trace_wages(winning_run)
+        self.assertEqual(snapshot[:1], (Decimal("22.00"),))
+        self.assertEqual(snapshot[1]["decision_id"], "b")
+
+        self.store.history, self.tick = history, tick
+        self.store.history[DECISIONS][-1] = [first, second, second]
+        self.assertEqual(self.run_job("2"), winning_run)
+        self.assertEqual(self.trace_wages(winning_run), snapshot)
+
     def test_duplicate_decision_and_replay_match_with_original_lineage(self):
         self.wages = "unreadable"
         first = self.run_job("1")

@@ -163,11 +163,11 @@ def show_lineage(reader, run_id):
     else:
         values = reader.lineage_values(run_id)
         if not values:
-            st.caption("No published Gold values have source field links.")
+            st.caption("No published Gold values are available.")
             return
         value = st.selectbox("Gold value", values, format_func=lambda item: item.label)
         field_links = reader.lineage(run_id, gold_row_id=value.gold_row_id, output_field=value.output_field)
     if field_links:
         st.dataframe([asdict(row) for row in field_links], hide_index=True)
     else:
-        st.caption("No field links for this selection.")
+        st.caption("No source field links were published for this selection.")

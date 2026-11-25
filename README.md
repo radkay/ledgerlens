@@ -35,7 +35,7 @@ Digital adapters handle W-2, 1099 and 1098 forms. Raster-only fixtures and the m
 
 Development and demo use separate Unity Catalog catalogs and environment-specific service principals. CI and release evidence deploy the bundle as scoped principals and run Processing and Evaluation jobs under their own identities. The public app uses the demo reader and can query only the contracted Gold serving views. Review actions run under the authenticated workspace user through the environment's reviewer group. Original PDFs and the evaluation answer key stay outside that group’s grants.
 
-Raw extraction records remain in Bronze. Silver applies identifier masks. The masked workbench and reviewer preview volume have scoped access, and the publication views exclude identifier values. The [contract](CONTRACT.md) lists exact grants and boundaries.
+Raw extraction records remain in Bronze. Unity Catalog masks both Silver identifier value columns. Members of the environment's identifier-readers group can see full values in Silver. Reviewers see only the last four digits, such as `****1234`, through the workbench. Other callers with Silver access receive `NULL` for identifier fields. The workbench keeps the last-four projection even for reviewers who also belong to the full-value group. Gold excludes identifier values. The [contract](CONTRACT.md) lists exact grants and boundaries.
 
 ## Publication and replay
 

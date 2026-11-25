@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .dashboard import Accuracy, PipelineEvent, Publication
 
-from .outputs import GoldValue, Lineage, Prefill
+from .outputs import ExpectedDocument, GoldValue, Lineage, PersonYear, Prefill
 from .workbench import Field, ReviewDocument, validate_decision
 
 PUBLISHED = Publication("fixture-publication-1", 1, datetime(2025, 11, 23, 16, tzinfo=UTC))
@@ -77,6 +77,22 @@ class FixtureReader:
         else:
             raise ValueError("Select a source document or one Gold output field.")
         return [FIXTURE_LINEAGE] if run_id == PUBLISHED.run_id and matches else []
+
+    def person_years(self, run_id):
+        if run_id != PUBLISHED.run_id:
+            return []
+        entry = FIXTURE_PREFILL
+        return [PersonYear(entry.person_key, entry.tax_year, entry.output_value, None, None)]
+
+    def expected_documents(self, run_id):
+        if run_id != PUBLISHED.run_id:
+            return []
+        entry = FIXTURE_PREFILL
+        return [
+            ExpectedDocument(entry.person_key, entry.tax_year, entry.form_type, "present"),
+            ExpectedDocument(entry.person_key, entry.tax_year, "1099", "missing"),
+            ExpectedDocument("fixture-person-002", entry.tax_year, "W-2", "missing"),
+        ]
 
     def prefill_forms(self, run_id):
         return [FIXTURE_PREFILL.form] if run_id == PUBLISHED.run_id else []
